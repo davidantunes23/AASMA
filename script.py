@@ -124,7 +124,7 @@ def visualise_map(
             f"A→exit: {m.get('dist_alien_exit')} steps   "
             f"A→P: {m.get('dist_alien_player')} steps   "
             f"vents: {m.get('vent_ratio',0):.1%}   "
-            f"hides: {m.get('hide_ratio',0):.1%}"
+            f"hides: {m.get('hide_number',0)}"
         )
         ax.set_title(
             (title or auto_title) + "\n" + sub,
@@ -209,7 +209,7 @@ def visualise_alpha_comparison(
         ax.set_title(
             f"alpha = {sign}{alpha:.1f}\n"
             f"vents {gen.metadata['vent_ratio']:.1%}  "
-            f"hides {gen.metadata['hide_ratio']:.1%}",
+            f"hides {gen.metadata['hide_number']}",
             color="white", fontsize=8, pad=5,
         )
 
@@ -275,7 +275,7 @@ def visualise_current_maps_comparison(
         ax.set_title(
             f"{label}\n"
             f"vents {gen.metadata['vent_ratio']:.1%}  "
-            f"hides {gen.metadata['hide_ratio']:.1%}",
+            f"hides {gen.metadata['hide_number']}",
             color="white", fontsize=8, pad=5,
         )
 

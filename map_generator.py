@@ -12,15 +12,16 @@ Tile legend:
     6 EXIT          player goal
 
 Alpha parameter  alpha in [-1, +1]:
-    alpha < 0  -> player-favoured  (more hiding spots, fewer vents)
+    alpha < 0  -> player-favoured  (more hiding spots per room, fewer vents)
     alpha = 0  -> balanced
-    alpha > 0  -> alien-favoured   (more vents, fewer hiding spots)
+    alpha > 0  -> alien-favoured   (more vents, fewer hiding spots per room)
 """
 
 import random
 import json
 import os
 import argparse
+import math
 from collections import deque
 
 import numpy as np
@@ -77,6 +78,7 @@ class MapGenerator:
         self.min_room_size = min_room_size
         self.max_room_size = max_room_size
         self.max_rooms = max_rooms
+        self.max_hides_per_room = int(max_room_size*max_room_size * 0.10)
 
         self.rng = random.Random(self.seed)
         self.np_rng = np.random.default_rng(self.seed)
@@ -88,16 +90,45 @@ class MapGenerator:
         self.exit_pos:   tuple | None = None
         self.metadata:   dict = {}
 
-    # ── Tile density from alpha ─────────────────────────────────────────────────
+    # ── Tile behaviour from alpha ───────────────────────────────────────────────
     @property
-    def vent_density(self) -> float:
+    def vent_probability(self) -> float:
         """Fraction of floor tiles converted to vents. Increases with alpha."""
-        return 0.04 + 0.06 * max(0.0, self.alpha)
+        return 0.5 + 0.5 * self.alpha
 
-    @property
-    def hide_density(self) -> float:
-        """Fraction of floor tiles converted to hiding spots. Increases as alpha decreases."""
-        return 0.04 + 0.06 * max(0.0, -self.alpha)
+    def hide_count_distribution(self, room_max_hides: int) -> list[float]:
+        """
+        Probability of placing k hiding spots per room for k in
+        [0, room_max_hides].
+
+        alpha < 0 shifts probability toward higher k (player-favoured).
+        alpha > 0 shifts probability toward lower k (alien-favoured).
+        alpha = 0 produces a uniform distribution.
+        """
+        if room_max_hides <= 0:
+            return [1.0]
+
+        counts = list(range(room_max_hides + 1))
+        tilt = -2.2 * self.alpha
+        logits = [tilt * k for k in counts]
+        max_logit = max(logits)
+        weights = [math.exp(v - max_logit) for v in logits]
+        total = sum(weights)
+        return [w / total for w in weights]
+
+    def _room_hide_max(self, room: tuple, floor_cells_available: int) -> int:
+        """
+        Scale each room's hide cap by room area, clipped by global max.
+        Larger rooms can host more hiding spots.
+        """
+        if self.max_hides_per_room <= 0 or floor_cells_available <= 0:
+            return 0
+
+        _, _, w, h = room
+        room_area = w * h
+        max_room_area = max(1, self.max_room_size * self.max_room_size)
+        scaled = math.ceil(self.max_hides_per_room * (room_area / max_room_area))
+        return max(1, min(self.max_hides_per_room, scaled, floor_cells_available))
 
     # ── Public API ──────────────────────────────────────────────────────────────
     def generate(self) -> "np.ndarray":
@@ -128,7 +159,7 @@ class MapGenerator:
             f"  seed={m.get('seed')}  alpha={m.get('alpha'):+.2f}  "
             f"rooms={m.get('n_rooms')}  "
             f"vents={m.get('vent_ratio', 0):.3f}  "
-            f"hides={m.get('hide_ratio', 0):.3f}"
+            f"hides={m.get('hide_number', 0):.3f}"
         )
         print(
             f"  dist P->exit={m.get('dist_player_exit')}  "
@@ -151,7 +182,8 @@ class MapGenerator:
             data = json.load(f)
         m = data["metadata"]
         gen = cls(width=m["width"], height=m["height"],
-                  alpha=m["alpha"], seed=m["seed"])
+                  alpha=m["alpha"], seed=m["seed"],
+                  max_hides_per_room=m.get("hide_max_per_room", 3))
         gen.grid = np.array(data["grid"], dtype=np.int8)
         gen.metadata = m
         gen.player_pos = tuple(m["player_start"])
@@ -228,22 +260,36 @@ class MapGenerator:
         self.grid[ay, ax] = ALIEN_START;   self.alien_pos  = (ax, ay)
         self.grid[ey, ex] = EXIT;          self.exit_pos   = (ex, ey)
 
-        # Collect plain floor cells for scatter
-        floor_yx = list(zip(*np.where(self.grid == FLOOR)))
-
         # Vents
-        n_vents = int(len(floor_yx) * self.vent_density)
-        if n_vents > 0:
-            chosen = self.rng.sample(floor_yx, min(n_vents, len(floor_yx)))
-            for (vy, vx) in chosen:
-                self.grid[vy, vx] = VENT
 
-        # Hiding spots (re-collect after vents)
-        floor_yx2 = list(zip(*np.where(self.grid == FLOOR)))
-        n_hide = int(len(floor_yx2) * self.hide_density)
-        if n_hide > 0:
-            chosen2 = self.rng.sample(floor_yx2, min(n_hide, len(floor_yx2)))
-            for (hy, hx) in chosen2:
+        for room in self.rooms:
+            if self.rng.random() >= self.vent_probability:
+                continue
+            x, y, w, h = room
+            vx = self.rng.randint(x, x + w - 1)
+            vy = self.rng.randint(y, y + h - 1)
+            self.grid[vy, vx] = VENT
+
+        # Hiding spots: sample per-room count from alpha-dependent distribution.
+        for room in self.rooms:
+            x, y, w, h = room
+            room_floor = [
+                (ry, rx)
+                for ry in range(y, y + h)
+                for rx in range(x, x + w)
+                if self.grid[ry, rx] == FLOOR
+            ]
+            if not room_floor:
+                continue
+
+            room_max_hides = self._room_hide_max(room, len(room_floor))
+            hide_counts = list(range(room_max_hides + 1))
+            hide_probs = self.hide_count_distribution(room_max_hides)
+            n_hide_room = int(self.np_rng.choice(hide_counts, p=hide_probs))
+            if n_hide_room <= 0:
+                continue
+
+            for hy, hx in self.rng.sample(room_floor, min(n_hide_room, len(room_floor))):
                 self.grid[hy, hx] = HIDE
 
     # ── Connectivity validation ─────────────────────────────────────────────────
@@ -288,7 +334,7 @@ class MapGenerator:
                         visited.add((nx, ny))
                         queue.append(((nx, ny), d + 1))
         return None
-
+            
     # ── Metadata ────────────────────────────────────────────────────────────────
     def _compute_metadata(self):
         total = self.width * self.height
@@ -308,10 +354,13 @@ class MapGenerator:
             "width":             self.width,
             "height":            self.height,
             "n_rooms":           len(self.rooms),
+            "hide_max_per_room": self.max_hides_per_room,
+            "hide_distribution":  [round(p, 4) for p in self.hide_count_distribution(self.max_hides_per_room)],
+            "hide_room_max_mode": "scaled_by_room_area",
             "tile_counts":       {TILE_NAME[k]: v for k, v in counts.items() if k in TILE_NAME},
             "open_ratio":        round(open_tiles / total, 4),
-            "vent_ratio":        round(counts.get(VENT, 0) / total, 4),
-            "hide_ratio":        round(counts.get(HIDE, 0) / total, 4),
+            "vent_ratio":        round(counts.get(VENT, 0) / len(self.rooms), 4),
+            "hide_number":        counts.get(HIDE, 0),
             "player_start":      list(self.player_pos),
             "alien_start":       list(self.alien_pos),
             "exit_pos":          list(self.exit_pos),
@@ -472,7 +521,7 @@ def run_demo(seed: int | None = None):
         print(
             f"  alpha={m['alpha']:+.2f}  "
             f"vents={m['vent_ratio']:.3f}  "
-            f"hides={m['hide_ratio']:.3f}  "
+            f"hides={m['hide_number']:.3f}  "
             f"P->exit={m['dist_player_exit']}  "
             f"A->P={m['dist_alien_player']}"
         )
