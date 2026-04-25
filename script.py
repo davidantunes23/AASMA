@@ -12,37 +12,36 @@ import random
 # ── make sure map_generator is importable ──────────────────────────────────────
 sys.path.insert(0, ".")
 from map_generator import (
-    MapGenerator, MapPool,
-    WALL, FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT,
+    MapGenerator, MapPool, Tile,
 )
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 TILE_COLORS = {
-    WALL:         "#1a1a2e",   # deep navy
-    FLOOR:        "#2e2e4a",   # dark slate
-    VENT:         "#9b59b6",   # purple
-    HIDE:         "#27ae60",   # green
-    PLAYER_START: "#2980b9",   # blue
-    ALIEN_START:  "#c0392b",   # red
-    EXIT:         "#f39c12",   # amber
+    Tile.WALL:         "#1a1a2e",   # deep navy
+    Tile.FLOOR:        "#2e2e4a",   # dark slate
+    Tile.VENT:         "#9b59b6",   # purple
+    Tile.HIDE:         "#27ae60",   # green
+    Tile.PLAYER_START: "#2980b9",   # blue
+    Tile.ALIEN_START:  "#c0392b",   # red
+    Tile.EXIT:         "#f39c12",   # amber
 }
 
 TILE_LABELS = {
-    WALL:         "Wall",
-    FLOOR:        "Floor",
-    VENT:         "Vent (alien shortcut)",
-    HIDE:         "Hiding Spot",
-    PLAYER_START: "Player Start",
-    ALIEN_START:  "Alien Start",
-    EXIT:         "Exit",
+    Tile.WALL:         "Wall",
+    Tile.FLOOR:        "Floor",
+    Tile.VENT:         "Vent (alien shortcut)",
+    Tile.HIDE:         "Hiding Spot",
+    Tile.PLAYER_START: "Player Start",
+    Tile.ALIEN_START:  "Alien Start",
+    Tile.EXIT:         "Exit",
 }
 
 TILE_SYMBOLS = {
-    VENT:         "V",
-    HIDE:         "H",
-    PLAYER_START: "P",
-    ALIEN_START:  "A",
-    EXIT:         "E",
+    Tile.VENT:         "V",
+    Tile.HIDE:         "H",
+    Tile.PLAYER_START: "P",
+    Tile.ALIEN_START:  "A",
+    Tile.EXIT:         "E",
 }
 
 # ── Core visualiser ────────────────────────────────────────────────────────────
@@ -143,7 +142,7 @@ def visualise_map(
     # Legend
     patches = [
         mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
-        for t in [WALL, FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT]
+        for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]
     ]
     ax.legend(
         handles=patches,
@@ -216,7 +215,7 @@ def visualise_alpha_comparison(
     # shared legend below
     patches = [
         mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
-        for t in [WALL, FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT]
+        for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]
     ]
     fig.legend(
         handles=patches,
@@ -281,7 +280,7 @@ def visualise_current_maps_comparison(
 
     patches = [
         mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
-        for t in [WALL, FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT]
+        for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]
     ]
     fig.legend(
         handles=patches,
