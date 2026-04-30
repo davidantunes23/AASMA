@@ -21,7 +21,7 @@ from matplotlib.colors import ListedColormap
 import numpy as np
 
 try:
-    from agents.alien import AlienAgent, Direction as AlienDirection
+    from agents.alien import AlienAgent
     from agents.human import Direction as HumanDirection, HumanAgent
     from game import Game
     from map_generator import MapGenerator, Tile
@@ -30,7 +30,7 @@ except ModuleNotFoundError:
     project_root_str = str(project_root)
     if project_root_str not in sys.path:
         sys.path.insert(0, project_root_str)
-    from agents.alien import AlienAgent, Direction as AlienDirection
+    from agents.alien import AlienAgent
     from agents.human import Direction as HumanDirection, HumanAgent
     from game import Game
     from map_generator import MapGenerator, Tile
@@ -42,6 +42,7 @@ class FrameState:
     human_pos: tuple[int, int]
     alien_pos: tuple[int, int]
     known_map: np.ndarray
+    alien_belief: np.ndarray
 
 
 def find_tile_pos(grid: np.ndarray, tile: Tile) -> tuple[int, int]:
@@ -63,12 +64,14 @@ def run_simulation(
 
     for step in range(max_steps + 1):
         known = game.human_agent._known_map.copy()
+        alien_knowledge = game.alien_agent.knowledge.get_copy()
         frames.append(
             FrameState(
                 step=step,
                 human_pos=game.human_pos,
                 alien_pos=game.alien_pos,
                 known_map=known,
+                alien_belief=alien_knowledge,
             )
         )
 
@@ -125,8 +128,9 @@ def visualize(
 ):
     world_cmap, known_cmap = build_colormaps()
     unknown_value = 7
+    player_seen_value = 8  # Use 8 for player seen in alien knowledge
 
-    fig, (ax_world, ax_known) = plt.subplots(1, 2, figsize=(12, 6), dpi=120)
+    fig, (ax_world, ax_known, ax_belief) = plt.subplots(1, 3, figsize=(16, 5), dpi=120)
     fig.patch.set_facecolor("#0B0D12")
 
     world_img = ax_world.imshow(grid, cmap=world_cmap, vmin=0, vmax=6)
@@ -135,7 +139,13 @@ def visualize(
     initial_known = np.where(frames[0].known_map == Game.UNSEEN_TILE, unknown_value, frames[0].known_map)
     known_img = ax_known.imshow(initial_known, cmap=known_cmap, vmin=0, vmax=7)
 
-    for ax, title in ((ax_world, "World"), (ax_known, "Human Knowledge")):
+    # Alien knowledge map - convert UNKNOWN(-1) and PLAYER_SEEN(-2) to display values
+    initial_alien_known = frames[0].alien_belief.copy()
+    initial_alien_known = np.where(initial_alien_known == -1, unknown_value, initial_alien_known)  # UNKNOWN
+    initial_alien_known = np.where(initial_alien_known == -2, player_seen_value, initial_alien_known)  # PLAYER_SEEN
+    belief_img = ax_belief.imshow(initial_alien_known, cmap=known_cmap, vmin=0, vmax=7)
+
+    for ax, title in ((ax_world, "World"), (ax_known, "Human Knowledge"), (ax_belief, "Alien Knowledge")):
         ax.set_title(title, color="white", fontsize=11)
         ax.set_xticks([])
         ax.set_yticks([])
@@ -152,10 +162,19 @@ def visualize(
     human_known_marker = ax_known.scatter(
         [hx], [hy], s=95, c="#00D4FF", edgecolors="white", linewidths=0.7, marker="o", zorder=5
     )
+    
+    # Markers on belief map: alien position and player
+    alien_belief_marker = ax_belief.scatter(
+        [ax], [ay], s=95, c="#FF4D6D", edgecolors="white", linewidths=0.7, marker="X", zorder=5
+    )
+    human_belief_marker = ax_belief.scatter(
+        [hx], [hy], s=95, c="#00D4FF", edgecolors="white", linewidths=0.7, marker="o", zorder=5
+    )
 
     exit_y, exit_x = find_tile_pos(grid, Tile.EXIT)
     ax_world.scatter([exit_x], [exit_y], s=80, c="#7A77FF", marker="*", zorder=6)
     ax_known.scatter([exit_x], [exit_y], s=80, c="#7A77FF", marker="*", zorder=6)
+    ax_belief.scatter([exit_x], [exit_y], s=80, c="#7A77FF", marker="*", zorder=6)
 
     status_text = fig.suptitle("", color="white", fontsize=12)
 
@@ -167,14 +186,22 @@ def visualize(
         human_world_marker.set_offsets([[hx0, hy0]])
         alien_world_marker.set_offsets([[ax0, ay0]])
         human_known_marker.set_offsets([[hx0, hy0]])
+        alien_belief_marker.set_offsets([[ax0, ay0]])
+        human_belief_marker.set_offsets([[hx0, hy0]])
 
         known = np.where(state.known_map == Game.UNSEEN_TILE, unknown_value, state.known_map)
         known_img.set_data(known)
+        
+        # Update alien knowledge map display
+        alien_known = state.alien_belief.copy()
+        alien_known = np.where(alien_known == -1, unknown_value, alien_known)  # UNKNOWN
+        alien_known = np.where(alien_known == -2, player_seen_value, alien_known)  # PLAYER_SEEN
+        belief_img.set_data(alien_known)
 
         status_text.set_text(
             f"Step {state.step}/{len(frames) - 1} | Outcome: {outcome} | Human(y,x)=({hy0},{hx0}) | Alien(y,x)=({ay0},{ax0})"
         )
-        return human_world_marker, alien_world_marker, human_known_marker, known_img, status_text
+        return human_world_marker, alien_world_marker, human_known_marker, alien_belief_marker, human_belief_marker, known_img, belief_img, status_text
 
     animation = FuncAnimation(
         fig,
@@ -208,8 +235,8 @@ def visualize(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Simulate and visualize one game episode")
-    parser.add_argument("--width", type=int, default=32, help="Map width")
-    parser.add_argument("--height", type=int, default=20, help="Map height")
+    parser.add_argument("--width", type=int, default=60, help="Map width")
+    parser.add_argument("--height", type=int, default=40, help="Map height")
     parser.add_argument("--alpha", type=float, default=0.0, help="Map alpha in [-1.0, 1.0]")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
@@ -254,8 +281,9 @@ def main():
     alien_start = find_tile_pos(grid, Tile.ALIEN_START)
     exit_pos = find_tile_pos(grid, Tile.EXIT)
 
+    # Convert from (y, x) to (x, y) for alien agent
     human_agent = HumanAgent(start_pos=human_start, start_dir=HumanDirection.NORTH)
-    alien_agent = AlienAgent(start_pos=alien_start, start_dir=AlienDirection.WEST)
+    alien_agent = AlienAgent(grid=grid.copy(), start_pos=(alien_start[1], alien_start[0]))
 
     game = Game(
         map=grid.copy(),

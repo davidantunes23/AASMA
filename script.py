@@ -325,17 +325,17 @@ def run_demo(seed: int | None = None):
         seed = random.randint(0, 2**31)
 
     # 1. Single balanced map
-    gen_balanced = MapGenerator(width=42, height=22, alpha=0.0, seed=seed)
+    gen_balanced = MapGenerator(width=60, height=40, alpha=0.0, seed=seed)
     gen_balanced.generate()
     visualise_map(gen_balanced, save_path="output/map_balanced.png")
 
     # 2. Alien-favoured
-    gen_alien = MapGenerator(width=42, height=22, alpha=0.8, seed=seed)
+    gen_alien = MapGenerator(width=60, height=40, alpha=0.8, seed=seed)
     gen_alien.generate()
     visualise_map(gen_alien, save_path="output/map_alien_favoured.png")
 
     # 3. Player-favoured
-    gen_player = MapGenerator(width=42, height=22, alpha=-0.8, seed=seed)
+    gen_player = MapGenerator(width=60, height=40, alpha=-0.8, seed=seed)
     gen_player.generate()
     visualise_map(gen_player, save_path="output/map_player_favoured.png")
 

@@ -18,18 +18,24 @@ class Game:
         self.human_agent = human_agent
         self.alien_agent = alien_agent
         self.human_pos = human_agent.position
-        self.alien_pos = alien_agent.position
+        self.alien_pos = alien_agent.pos
         self.human_view_length = max(0, human_view_length)
+        self.step_num = 0
         human_agent._init_memory(self._human_cone_observation())
 
     def _step(self):       
         human_action = self.human_agent._act(self._human_cone_observation())
-        alien_action = self.alien_agent._act(self.map)
-        
+
         match human_action[0]:
             case Action.WALK:
                 self.human_pos = self._walk(self.human_pos, human_action[1])
                 self.human_agent.position = self.human_pos
+
+        # Convert human_pos from (y, x) to (x, y) for alien agent, then convert result back
+        human_x, human_y = self.human_pos[1], self.human_pos[0]
+        alien_x, alien_y = self.alien_agent.step((human_x, human_y), self.step_num)
+        self.alien_pos = (alien_y, alien_x)  # Convert back to (y, x)
+        self.step_num += 1
 
     def _walk(self, position: tuple[int, int], direction: Direction) -> tuple[int, int]:
         new_position = position

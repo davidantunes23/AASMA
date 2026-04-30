@@ -63,13 +63,13 @@ class MapGenerator:
 
     def __init__(
         self,
-        width: int = 32,
-        height: int = 20,
+        width: int = 60,
+        height: int = 40,
         alpha: float = 0.0,
         seed: int | None = None,
-        min_room_size: int = 3,
-        max_room_size: int = 8,
-        max_rooms: int = 12,
+        min_room_size: int | None = None,
+        max_room_size: int | None = None,
+        max_rooms: int | None = None,
         max_hides_per_room: int | None = None,
     ):
         if not -1.0 <= alpha <= 1.0:
@@ -78,6 +78,15 @@ class MapGenerator:
         self.height = height
         self.alpha = alpha
         self.seed = seed if seed is not None else random.randint(0, 2**31)
+
+        scale = max(width / 60.0, height / 40.0)
+        if min_room_size is None:
+            min_room_size = max(3, int(round(3 * scale)))
+        if max_room_size is None:
+            max_room_size = max(min_room_size + 2, int(round(8 * scale)))
+        if max_rooms is None:
+            max_rooms = max(12, int(round(12 * scale)))
+
         self.min_room_size = min_room_size
         self.max_room_size = max_room_size
         self.max_rooms = max_rooms
@@ -391,8 +400,8 @@ class MapPool:
     def __init__(
         self,
         n_maps: int = 10,
-        width: int = 32,
-        height: int = 20,
+        width: int = 60,
+        height: int = 40,
         alpha_range: tuple = (-1.0, 1.0),
         **kwargs,
     ):
@@ -551,5 +560,49 @@ if __name__ == "__main__":
         default=None,
         help="Optional integer seed. Different seeds produce different maps.",
     )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=32,
+        help="Map width in cells (default: 32)",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=20,
+        help="Map height in cells (default: 20)",
+    )
     args = parser.parse_args()
-    run_demo(args.seed)
+    
+    # Override demo to use specified dimensions
+    seed = args.seed
+    if seed is None:
+        seed = random.randint(0, 2**31 - 1)
+    
+    print()
+    print("=" * 70)
+    print(f"  BALANCED  (alpha = 0.0, seed = {seed})  [{args.width}x{args.height}]")
+    print("=" * 70)
+    g0 = MapGenerator(width=args.width, height=args.height, alpha=0.0, seed=seed)
+    g0.generate()
+    g0.print_map()
+
+    print()
+    print("=" * 70)
+    print(f"  ALIEN-FAVOURED  (alpha = +0.8, seed = {seed})  [{args.width}x{args.height}]")
+    print("=" * 70)
+    g_a = MapGenerator(width=args.width, height=args.height, alpha=0.8, seed=seed)
+    g_a.generate()
+    g_a.print_map()
+
+    print()
+    print("=" * 70)
+    print(f"  PLAYER-FAVOURED  (alpha = -0.8, seed = {seed})  [{args.width}x{args.height}]")
+    print("=" * 70)
+    g_p = MapGenerator(width=args.width, height=args.height, alpha=-0.8, seed=seed)
+    g_p.generate()
+    g_p.print_map()
+
+    g0.save(f"maps/demo_balanced_seed_{seed}.json")
+    print()
+    print(f"Saved maps/demo_balanced_seed_{seed}.json")
