@@ -277,6 +277,9 @@ class MapGenerator:
         self.grid[ay, ax] = Tile.ALIEN_START;   self.alien_pos  = (ax, ay)
         self.grid[ey, ex] = Tile.EXIT;          self.exit_pos   = (ex, ey)
 
+        # Track special tile positions to avoid overwriting them
+        special_tiles = {(px, py), (ax, ay), (ex, ey)}
+
         # Vents
 
         for room in self.rooms:
@@ -285,7 +288,9 @@ class MapGenerator:
             x, y, w, h = room
             vx = self.rng.randint(x, x + w - 1)
             vy = self.rng.randint(y, y + h - 1)
-            self.grid[vy, vx] = Tile.VENT
+            # Don't overwrite special tiles (spawns, exit)
+            if (vx, vy) not in special_tiles:
+                self.grid[vy, vx] = Tile.VENT
 
         # Hiding spots: sample per-room count from alpha-dependent distribution.
         for room in self.rooms:
@@ -307,7 +312,9 @@ class MapGenerator:
                 continue
 
             for hy, hx in self.rng.sample(room_floor, min(n_hide_room, len(room_floor))):
-                self.grid[hy, hx] = Tile.HIDE
+                # Don't overwrite special tiles (spawns, exit)
+                if (hx, hy) not in special_tiles:
+                    self.grid[hy, hx] = Tile.HIDE
 
     # ── Connectivity validation ─────────────────────────────────────────────────
     def _validate_connectivity(self):

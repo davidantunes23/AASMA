@@ -6,6 +6,16 @@ from map_generator import Tile
 
 class Game:
     UNSEEN_TILE = -1
+    RADAR_PING = -3      # Radar distance indicator
+    NOISE_RIPPLE = -4    # Noise event ripple (visual marker)
+
+    # Radar threat levels based on Manhattan distance
+    RADAR_BANDS = {
+        "CRITICAL": (0, 5),
+        "CLOSE": (6, 10),
+        "NEAR": (11, 16),
+        "FAR": (17, float('inf')),
+    }
 
     def __init__(
         self,
@@ -13,6 +23,8 @@ class Game:
         human_agent: HumanAgent,
         alien_agent: AlienAgent,
         human_view_length: int = 6,
+        p_noise: float = 0.1,
+        radar_interval: int = 5,
     ):
         self.map = map
         self.human_agent = human_agent
@@ -21,19 +33,84 @@ class Game:
         self.alien_pos = alien_agent.pos
         self.human_view_length = max(0, human_view_length)
         self.step_num = 0
+        
+        # Noise and radar parameters
+        self.p_noise = p_noise          # Probability of creating noise per step [0.05-0.15]
+        self.radar_interval = radar_interval  # Radar ping interval in steps (default 5)
+        self.steps_since_radar = 0      # Counter for radar pings
+        self.radar_active_for = 0       # How many more steps the radar remains active (persistence)
+        self.last_radar_threat = None   # Last radar threat level (CRITICAL/CLOSE/NEAR/FAR)
+        self.last_radar_dist = None     # Last radar distance measurement
+        self.last_heard_pos = None      # Last position where alien heard noise
+        self.last_noise_ripple = None   # Position of last noise ripple (for visualization)
+        self.noise_ripple_age = 0       # Age of noise ripple (fades over time)
+        
         human_agent._init_memory(self._human_cone_observation())
 
-    def _step(self):       
-        human_action = self.human_agent._act(self._human_cone_observation())
+    def _step(self):
+        # === UPDATE RADAR FIRST (before player acts) ===
+        # So player can make decisions based on current radar state
+        self.steps_since_radar += 1
+        if self.steps_since_radar >= self.radar_interval:
+            self.steps_since_radar = 0
+            # Player receives a radar ping with threat level based on Manhattan distance
+            human_x, human_y = self.human_pos[1], self.human_pos[0]
+            alien_y, alien_x = self.alien_pos
+            dist = abs(human_x - alien_x) + abs(human_y - alien_y)
+            for threat_level, (min_d, max_d) in self.RADAR_BANDS.items():
+                if min_d <= dist <= max_d:
+                    # Store radar info and set persistence (radar is active for 2-3 steps)
+                    self.last_radar_threat = threat_level
+                    self.last_radar_dist = dist
+                    self.radar_active_for = 2  # Radar persists for 2 more steps after ping
+                    break
+        else:
+            # Age out radar persistence
+            if self.radar_active_for > 0:
+                self.radar_active_for -= 1
+                # Keep radar active during persistence
+            else:
+                # Radar completely cleared
+                self.last_radar_threat = None
+                self.last_radar_dist = None
+        
+        # === PLAYER ACTION (with current radar state) ===
+        human_action = self.human_agent._act(self._human_cone_observation(), self.last_radar_threat, self.last_radar_dist)
 
         match human_action[0]:
             case Action.WALK:
                 self.human_pos = self._walk(self.human_pos, human_action[1])
                 self.human_agent.position = self.human_pos
+            case Action.WAIT:
+                self.human_agent.position = self.human_pos
 
         # Convert human_pos from (y, x) to (x, y) for alien agent, then convert result back
         human_x, human_y = self.human_pos[1], self.human_pos[0]
-        alien_x, alien_y = self.alien_agent.step((human_x, human_y), self.step_num)
+        
+        # === NOISE GENERATION (Auditory Evidence) ===
+        # Player has p_noise probability of creating a noise event each step
+        # BUT: player produces no sound if hiding
+        heard_pos = (human_x, human_y)  # Default: exact position
+        if not self.human_agent.hidden and np.random.random() < self.p_noise:
+            # Noise occurs! Add uncertainty (±1 to ±2 cells)
+            noise_offset_x = np.random.randint(-2, 3)  # -2, -1, 0, 1, 2
+            noise_offset_y = np.random.randint(-2, 3)
+            heard_x = max(0, min(human_x + noise_offset_x, self.map.shape[1] - 1))
+            heard_y = max(0, min(human_y + noise_offset_y, self.map.shape[0] - 1))
+            heard_pos = (heard_x, heard_y)
+            self.last_heard_pos = heard_pos
+            self.last_noise_ripple = (human_y, human_x)  # Store ripple center in (y,x)
+            self.noise_ripple_age = 0
+        
+        # Age the noise ripple
+        if self.last_noise_ripple is not None:
+            self.noise_ripple_age += 1
+            if self.noise_ripple_age > 2:  # Ripple fades after 2 steps
+                self.last_noise_ripple = None
+        
+        # Pass heard position to alien (noisy auditory evidence)
+        # But alien also gets exact visual observation from FOV
+        alien_x, alien_y = self.alien_agent.step((human_x, human_y), heard_pos, self.step_num)
         self.alien_pos = (alien_y, alien_x)  # Convert back to (y, x)
         self.step_num += 1
 
@@ -72,10 +149,25 @@ class Game:
                     continue
                 if self._has_line_of_sight((hy, hx), (ty, tx)):
                     obs[ty, tx] = int(self.map[ty, tx])
+        
+        # === NOISE RIPPLE VISUALIZATION ===
+        # Show yellow ripple around player's true position when noise occurs
+        if self.last_noise_ripple is not None:
+            ny, nx = self.last_noise_ripple
+            # Draw ripple in a small radius around noise center
+            for dy in [-1, 0, 1]:
+                for dx in [-1, 0, 1]:
+                    ry, rx = ny + dy, nx + dx
+                    if self._in_bounds(ry, rx) and obs[ry, rx] != self.UNSEEN_TILE:
+                        # Optionally show ripple (for debugging/visualization)
+                        # obs[ry, rx] = self.NOISE_RIPPLE  # Uncomment for ripple visualization
+                        pass
 
-        ay, ax = self.alien_pos
-        if self._in_bounds(ay, ax) and obs[ay, ax] != self.UNSEEN_TILE:
-            obs[ay, ax] = HumanAgent.ALIEN
+        # === RADAR INDICATOR AT PLAYER POSITION ===
+        # When radar pings (every N steps), show indicator at player's position
+        # This tells the player "alien detected nearby" but not exact location
+        if self.last_radar_threat is not None:
+            obs[hy, hx] = self.RADAR_PING  # Override with radar ping indicator
 
         return obs
 
