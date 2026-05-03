@@ -462,7 +462,7 @@ class AlienAgent:
         # STATE MACHINE: SEARCH ↔ INVESTIGATE ↔ HUNT
         # Transitions:
         #   - Player visible → HUNT
-        #   - Lost sight in HUNT → INVESTIGATE at last known position
+        #   - Lost sight in HUNT → SEARCH unless there is recent sound evidence
         #   - Investigated area thoroughly → back to SEARCH
         #
         # Uses knowledge map (70% exploration threshold) to decide when to abandon investigation
@@ -471,8 +471,12 @@ class AlienAgent:
             self.last_known_pos = player_pos
             self.state = AlienState.HUNT
         elif self.state == AlienState.HUNT:
-            # Lost sight of player: investigate at last known position
-            self.state = AlienState.INVESTIGATE
+            # Lost sight of player: if no recent sound, resume exploration immediately
+            if self.last_heard_pos is None or self.steps_since_heard > 5:
+                self.state = AlienState.SEARCH
+            else:
+                # Recent sound still exists, so investigate the last known area
+                self.state = AlienState.INVESTIGATE
         elif self.state == AlienState.INVESTIGATE:
             # Check if investigation is complete
             if self.last_known_pos and heuristic(self.pos, self.last_known_pos) <= 1:
@@ -481,6 +485,9 @@ class AlienAgent:
                 # If 70%+ of surrounding area is mapped and player not found, return to general search
                 if explored_ratio > 0.7:
                     self.state = AlienState.SEARCH
+            elif self.last_heard_pos is None or self.steps_since_heard > 5:
+                # No fresh evidence remains, so stop investigating and go back to exploration
+                self.state = AlienState.SEARCH
 
     def _best_seen_vent_route_for_sound(self, sound_pos: tuple) -> Optional[tuple]:
         # Find if any observed vent provides strategic advantage for reaching heard sound

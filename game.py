@@ -11,12 +11,13 @@ class Game:
     RADAR_PING = -3      # Radar distance indicator
     NOISE_RIPPLE = -4    # Noise event ripple (visual marker)
 
-    # Radar threat levels based on Manhattan distance
+    # Radar threat levels based on topology-aware distance
+    # Critical is intentionally wider because the alien accelerates when it sees the player
     RADAR_BANDS = {
-        "CRITICAL": (0, 5),
-        "CLOSE": (6, 10),
-        "NEAR": (11, 16),
-        "FAR": (17, float('inf')),
+        "CRITICAL": (0, 7),
+        "CLOSE": (8, 12),
+        "NEAR": (13, 18),
+        "FAR": (19, float('inf')),
     }
 
     def __init__(
