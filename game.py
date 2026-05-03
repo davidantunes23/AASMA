@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 from agents.alien import AlienAgent
 from agents.human import HumanAgent, Action, Direction
@@ -47,16 +49,41 @@ class Game:
         
         human_agent._init_memory(self._human_cone_observation())
 
+    def _topology_distance(self, start: tuple[int, int], goal: tuple[int, int]) -> int:
+        if start == goal:
+            return 0
+
+        frontier = deque([(start, 0)])
+        visited = {start}
+
+        while frontier:
+            (y, x), dist = frontier.popleft()
+            for dy, dx in ((-1, 0), (0, 1), (1, 0), (0, -1)):
+                ny, nx = y + dy, x + dx
+                next_pos = (ny, nx)
+                if not self._in_bounds(ny, nx):
+                    continue
+                if next_pos in visited:
+                    continue
+                if self.map[ny, nx] == Tile.WALL:
+                    continue
+                if next_pos == goal:
+                    return dist + 1
+                visited.add(next_pos)
+                frontier.append((next_pos, dist + 1))
+
+        human_y, human_x = start
+        alien_y, alien_x = goal
+        return abs(human_y - alien_y) + abs(human_x - alien_x)
+
     def _step(self):
         # === UPDATE RADAR FIRST (before player acts) ===
         # So player can make decisions based on current radar state
         self.steps_since_radar += 1
         if self.steps_since_radar >= self.radar_interval:
             self.steps_since_radar = 0
-            # Player receives a radar ping with threat level based on Manhattan distance
-            human_x, human_y = self.human_pos[1], self.human_pos[0]
-            alien_y, alien_x = self.alien_pos
-            dist = abs(human_x - alien_x) + abs(human_y - alien_y)
+            # Player receives a radar ping with threat level based on topology-aware distance
+            dist = self._topology_distance(self.human_pos, self.alien_pos)
             for threat_level, (min_d, max_d) in self.RADAR_BANDS.items():
                 if min_d <= dist <= max_d:
                     # Store radar info and set persistence (radar is active for 2-3 steps)
