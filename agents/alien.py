@@ -43,6 +43,7 @@ SPEED = {
 # Vent teleportation thresholds
 VENT_ROUTE_MIN_SOUND_DISTANCE = 8  # Only teleport if sound is 8+ cells away
 VENT_ROUTE_MIN_SAVINGS = 4         # Vent route must save 4+ steps vs direct path
+VENT_TELEPORT_COST = 0             # Step cost for a vent teleport (0 = instant)
 
 # Pathfinding utilities
 def heuristic(a, b):
@@ -193,6 +194,7 @@ class KnowledgeMap:
         self.grid = grid
         H, W = grid.shape
         self.knowledge = np.full((H, W), UNKNOWN, dtype=np.int16)
+        self.seen_vents = set()  # Track observed vent positions
 
     def update_from_observation(self, visible_cells, grid_map, player_pos, player_visible, player_hiding):
         # Record all tiles from FOV into knowledge map
@@ -200,6 +202,8 @@ class KnowledgeMap:
         for (vx, vy) in visible_cells:
             if 0 <= vy < grid_map.shape[0] and 0 <= vx < grid_map.shape[1]:
                 self.knowledge[vy, vx] = int(grid_map[vy, vx])
+                if grid_map[vy, vx] == VENT:
+                    self.seen_vents.add((vx, vy))
         
         # Mark player if visible
         if player_visible and not player_hiding and player_pos:
@@ -229,14 +233,7 @@ class KnowledgeMap:
     def get_seen_vents(self):
         # Return list of (x, y) positions of all observed vents
         # These are potential teleport targets for strategic routing
-        H, W = self.knowledge.shape
-        vents = []
-        for y in range(H):
-            for x in range(W):
-                # Vent must be in knowledge (observed) and have VENT tile value
-                if self.knowledge[y, x] == VENT:
-                    vents.append((x, y))
-        return vents
+        return list(self.seen_vents)
 
     def get_previously_seen_player_area(self):
         # Return list of (x, y) positions where player was previously observed
@@ -415,7 +412,7 @@ class AlienAgent:
         # STEP 4.5: VENT TELEPORTATION
         # Check if strategic teleport through vent is beneficial
         self.vent_teleport_used = False
-        if sound_detected and self.last_heard_pos:
+        if self.last_heard_pos is not None and self.steps_since_heard <= 5:
             target_vent = self._evaluate_vent_teleport(self.last_heard_pos)
             if target_vent:
                 self._teleport_to_vent(target_vent)  # Immediate teleport if beneficial
@@ -490,7 +487,7 @@ class AlienAgent:
         # Returns vent (x,y) if beneficial, else None
         # Gates: sound must be 8+ cells away, vent route must save 4+ steps
         seen_vents = self.knowledge.get_seen_vents()
-        if not seen_vents:
+        if len(seen_vents) < 2:
             return None
 
         # Only consider vent routing if sound is far away (8+ cells)
@@ -498,22 +495,17 @@ class AlienAgent:
         if direct_dist < VENT_ROUTE_MIN_SOUND_DISTANCE:
             return None
 
-        # Find vent with best savings
-        best_vent = None
-        best_savings = 0
-        for vent in seen_vents:
-            # Calculate distance via this vent vs direct
-            dist_via_vent = heuristic(self.pos, vent) + heuristic(vent, sound_pos)
-            savings = direct_dist - dist_via_vent
-            if savings > best_savings:
-                best_savings = savings
-                best_vent = vent
-
-        # Only use vent if it saves 4+ steps
-        if best_vent is None or best_savings < VENT_ROUTE_MIN_SAVINGS:
+        start_vent = min(seen_vents, key=lambda v: heuristic(self.pos, v))
+        dest_vent = min(seen_vents, key=lambda v: heuristic(v, sound_pos))
+        if start_vent == dest_vent:
             return None
 
-        return best_vent
+        dist_via_vent = heuristic(self.pos, start_vent) + VENT_TELEPORT_COST + heuristic(dest_vent, sound_pos)
+        savings = direct_dist - dist_via_vent
+        if savings < VENT_ROUTE_MIN_SAVINGS:
+            return None
+
+        return start_vent
 
     def _evaluate_vent_teleport(self, sound_pos: tuple) -> Optional[tuple]:
         # Decide if immediate vent teleportation is beneficial
@@ -530,10 +522,22 @@ class AlienAgent:
         if self.grid[self.pos[1], self.pos[0]] != VENT:
             return None
 
-        # Find beneficial vent from current vent
-        best_vent = self._best_seen_vent_route_for_sound(sound_pos)
-        if best_vent is None or best_vent == self.pos:
-            return None  # No beneficial other vent
+        seen_vents = self.knowledge.get_seen_vents()
+        if len(seen_vents) < 2:
+            return None
+
+        direct_dist = heuristic(self.pos, sound_pos)
+        if direct_dist < VENT_ROUTE_MIN_SOUND_DISTANCE:
+            return None
+
+        best_vent = min(seen_vents, key=lambda v: heuristic(v, sound_pos))
+        if best_vent == self.pos:
+            return None
+
+        dist_via_vent = VENT_TELEPORT_COST + heuristic(best_vent, sound_pos)
+        savings = direct_dist - dist_via_vent
+        if savings < VENT_ROUTE_MIN_SAVINGS:
+            return None
 
         return best_vent
 

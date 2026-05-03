@@ -21,7 +21,7 @@ from matplotlib.colors import ListedColormap
 import numpy as np
 
 try:
-    from agents.alien import AlienAgent
+    from agents.alien import AlienAgent, compute_fov
     from agents.human import Direction as HumanDirection, HumanAgent
     from game import Game
     from map_generator import MapGenerator, Tile
@@ -30,7 +30,7 @@ except ModuleNotFoundError:
     project_root_str = str(project_root)
     if project_root_str not in sys.path:
         sys.path.insert(0, project_root_str)
-    from agents.alien import AlienAgent
+    from agents.alien import AlienAgent, compute_fov
     from agents.human import Direction as HumanDirection, HumanAgent
     from game import Game
     from map_generator import MapGenerator, Tile
@@ -44,6 +44,8 @@ class FrameState:
     alien_pos: tuple[int, int]
     known_map: np.ndarray
     alien_belief: np.ndarray
+    human_sees_alien: bool = False
+    alien_sees_human: bool = False
     radar_threat: str | None = None  # CRITICAL, CLOSE, NEAR, FAR
     radar_dist: int | None = None    # Actual Manhattan distance
     noise_ripple_pos: tuple[int, int] | None = None  # Position of heard noise
@@ -71,6 +73,16 @@ def run_simulation(
     for step in range(max_steps + 1):
         known = game.human_agent._known_map.copy()
         alien_knowledge = game.alien_agent.knowledge.get_copy()
+        human_hidden = game.human_agent._is_hidden()
+        human_obs = game._human_cone_observation()
+        alien_pos_yx = game.alien_pos
+        human_sees_alien = False
+        if 0 <= alien_pos_yx[0] < human_obs.shape[0] and 0 <= alien_pos_yx[1] < human_obs.shape[1]:
+            human_sees_alien = human_obs[alien_pos_yx] != Game.UNSEEN_TILE
+        alien_pos_xy = (alien_pos_yx[1], alien_pos_yx[0])
+        human_pos_xy = (game.human_pos[1], game.human_pos[0])
+        alien_fov = compute_fov(game.alien_agent.grid, alien_pos_xy, game.alien_agent.fov_radius)
+        alien_sees_human = human_pos_xy in alien_fov and not human_hidden
         
         # Capture radar and noise info
         radar_threat = getattr(game, 'last_radar_threat', None)
@@ -85,10 +97,12 @@ def run_simulation(
             FrameState(
                 step=step,
                 human_pos=game.human_pos,
-                human_hidden=game.human_agent._is_hidden(),
+                human_hidden=human_hidden,
                 alien_pos=game.alien_pos,
                 known_map=known,
                 alien_belief=alien_knowledge,
+                human_sees_alien=human_sees_alien,
+                alien_sees_human=alien_sees_human,
                 radar_threat=radar_threat,
                 radar_dist=radar_dist,
                 noise_ripple_pos=noise_ripple,
@@ -184,6 +198,9 @@ def visualize(
     human_known_marker = ax_known.scatter(
         [hx], [hy], s=95, c="#00D4FF", edgecolors="white", linewidths=0.7, marker="o", zorder=5
     )
+    alien_known_marker = ax_known.scatter(
+        [ax], [ay], s=95, c="#FF4D6D", edgecolors="white", linewidths=0.7, marker="X", zorder=5
+    )
     
     # Markers on belief map: alien position and player
     alien_belief_marker = ax_belief.scatter(
@@ -225,7 +242,8 @@ def visualize(
     alien_heard_circle = plt.Circle((hx, hy), 0.5, fill=False, edgecolor='#FF0000', linewidth=2.0, zorder=4, linestyle=':', alpha=0.8)
     ax_belief.add_patch(alien_heard_circle)
     alien_heard_marker = ax_belief.scatter([hx], [hy], s=60, c='#FF0000', edgecolors='white', linewidths=0.5, marker='*', zorder=5, alpha=0.7)
-    status_text = fig.suptitle("", color="white", fontsize=12)
+    total_steps = len(frames) - 1
+    status_text = fig.suptitle("", color="white", fontsize=12, x=0.02, ha="left", fontfamily="monospace")
 
     def update(frame_index: int):
         state = frames[frame_index]
@@ -235,6 +253,7 @@ def visualize(
         human_world_marker.set_offsets([[hx0, hy0]])
         alien_world_marker.set_offsets([[ax0, ay0]])
         human_known_marker.set_offsets([[hx0, hy0]])
+        alien_known_marker.set_offsets([[ax0, ay0]])
         alien_belief_marker.set_offsets([[ax0, ay0]])
         human_belief_marker.set_offsets([[hx0, hy0]])
         hidden_world_ring.set_offsets([[hx0, hy0]])
@@ -263,6 +282,9 @@ def visualize(
             human_known_marker.set_facecolor("#00D4FF")
             hidden_world_ring.set_visible(False)
             hidden_known_ring.set_visible(False)
+
+        alien_known_marker.set_visible(state.human_sees_alien)
+        human_belief_marker.set_visible(state.alien_sees_human)
         
         # === UPDATE NOISE RIPPLE POSITION AND VISIBILITY ===
         if state.noise_ripple_pos is not None:
@@ -299,16 +321,24 @@ def visualize(
         alien_known = np.where(alien_known == -2, player_seen_value, alien_known)  # PLAYER_SEEN
         belief_img.set_data(alien_known)
 
-        # === UPDATE STATUS TEXT WITH RADAR INFO ===
-        radar_info = f" | Radar: {state.radar_threat}" if state.radar_threat else ""
-        sound_info = " | SOUND DETECTED!" if state.noise_ripple_pos else ""
-        # Add alien hearing status
-        alien_sound_info = " | Alien Chasing Sound!" if state.alien_pursuing else ""
-        hidden_info = " | HIDDEN" if state.human_hidden else ""
         status_text.set_text(
-            f"Step {state.step}/{len(frames) - 1} | Outcome: {outcome} | Human(y,x)=({hy0},{hx0}) | Alien(y,x)=({ay0},{ax0}){radar_info}{sound_info}{alien_sound_info}{hidden_info}"
+            "Step {step:4d}/{total:4d} | Outcome: {outcome:<18} | "
+            "Human(y,x)=({hy:3d},{hx:3d}) | Alien(y,x)=({ay:3d},{ax:3d}) | "
+            "Radar: {radar:<8} | Sound: {sound:<3} | AlienSound: {asound:<3} | Hidden: {hidden:<3}".format(
+                step=state.step,
+                total=total_steps,
+                outcome=outcome,
+                hy=hy0,
+                hx=hx0,
+                ay=ay0,
+                ax=ax0,
+                radar=state.radar_threat or "NONE",
+                sound="YES" if state.noise_ripple_pos else "NO",
+                asound="YES" if state.alien_pursuing else "NO",
+                hidden="YES" if state.human_hidden else "NO",
+            )
         )
-        return human_world_marker, alien_world_marker, human_known_marker, alien_belief_marker, human_belief_marker, hidden_world_ring, hidden_known_ring, known_img, belief_img, status_text, radar_threat_circle, *noise_ripple_circles, alien_heard_circle, alien_heard_marker
+        return human_world_marker, alien_world_marker, human_known_marker, alien_known_marker, alien_belief_marker, human_belief_marker, hidden_world_ring, hidden_known_ring, known_img, belief_img, status_text, radar_threat_circle, *noise_ripple_circles, alien_heard_circle, alien_heard_marker
 
     animation = FuncAnimation(
         fig,
@@ -379,7 +409,8 @@ def visualize_world_only(
     exit_y, exit_x = find_tile_pos(grid, Tile.EXIT)
     ax.scatter([exit_x], [exit_y], s=100, c="#f39c12", marker="*", zorder=6)
 
-    status_text = fig.suptitle("", color="white", fontsize=12)
+    total_steps = len(frames) - 1
+    status_text = fig.suptitle("", color="white", fontsize=12, x=0.02, ha="left", fontfamily="monospace")
 
     def update(frame_index: int):
         state = frames[frame_index]
@@ -397,10 +428,18 @@ def visualize_world_only(
             human_marker.set_facecolor("#00D4FF")
             hidden_ring.set_visible(False)
         
-        hidden_info = " [HIDDEN]" if state.human_hidden else ""
         status_text.set_text(
-            f"Step {state.step}/{len(frames) - 1} | Outcome: {outcome} | "
-            f"Player(y,x)=({hy0},{hx0}) | Alien(y,x)=({ay0},{ax0}){hidden_info}"
+            "Step {step:4d}/{total:4d} | Outcome: {outcome:<18} | "
+            "Player(y,x)=({hy:3d},{hx:3d}) | Alien(y,x)=({ay:3d},{ax:3d}) | Hidden: {hidden:<3}".format(
+                step=state.step,
+                total=total_steps,
+                outcome=outcome,
+                hy=hy0,
+                hx=hx0,
+                ay=ay0,
+                ax=ax0,
+                hidden="YES" if state.human_hidden else "NO",
+            )
         )
         return human_marker, alien_marker, hidden_ring, status_text
 
