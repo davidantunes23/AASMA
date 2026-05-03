@@ -295,28 +295,38 @@ class MapGenerator:
         # Hiding spots: sample per-room count from alpha-dependent distribution.
         for room in self.rooms:
             x, y, w, h = room
-            # Only place hides on the room border so they stay accessible but do not
-            # occupy the room interior or interfere with corridor flow.
-            room_border_floor = []
-            for ry in range(y, y + h):
-                for rx in range(x, x + w):
-                    if self.grid[ry, rx] != Tile.FLOOR:
+            # Place hides on the wall ring surrounding the room.
+            # These cells remain reachable from the room, but they sit outside the
+            # main floor so they do not interfere with room traversal.
+            wall_border_cells = []
+            for wy in range(y - 1, y + h + 1):
+                for wx in range(x - 1, x + w + 1):
+                    if not (0 <= wx < self.width and 0 <= wy < self.height):
                         continue
-                    if rx not in {x, x + w - 1} and ry not in {y, y + h - 1}:
+                    if self.grid[wy, wx] != Tile.WALL:
                         continue
-                    room_border_floor.append((ry, rx))
 
-            if not room_border_floor:
+                    touches_room_floor = False
+                    for dy, dx in ((-1, 0), (0, 1), (1, 0), (0, -1)):
+                        ny, nx = wy + dy, wx + dx
+                        if 0 <= nx < self.width and 0 <= ny < self.height and self.grid[ny, nx] == Tile.FLOOR:
+                            touches_room_floor = True
+                            break
+
+                    if touches_room_floor:
+                        wall_border_cells.append((wy, wx))
+
+            if not wall_border_cells:
                 continue
 
-            room_max_hides = self._room_hide_max(room, len(room_border_floor))
+            room_max_hides = self._room_hide_max(room, len(wall_border_cells))
             hide_counts = list(range(room_max_hides + 1))
             hide_probs = self.hide_count_distribution(room_max_hides)
             n_hide_room = int(self.np_rng.choice(hide_counts, p=hide_probs))
             if n_hide_room <= 0:
                 continue
 
-            for hy, hx in self.rng.sample(room_border_floor, min(n_hide_room, len(room_border_floor))):
+            for hy, hx in self.rng.sample(wall_border_cells, min(n_hide_room, len(wall_border_cells))):
                 # Don't overwrite special tiles (spawns, exit)
                 if (hx, hy) not in special_tiles:
                     self.grid[hy, hx] = Tile.HIDE
