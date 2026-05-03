@@ -295,23 +295,28 @@ class MapGenerator:
         # Hiding spots: sample per-room count from alpha-dependent distribution.
         for room in self.rooms:
             x, y, w, h = room
-            room_floor = [
-                (ry, rx)
-                for ry in range(y, y + h)
-                for rx in range(x, x + w)
-                if self.grid[ry, rx] == Tile.FLOOR
-            ]
-            if not room_floor:
+            # Only place hides on the room border so they stay accessible but do not
+            # occupy the room interior or interfere with corridor flow.
+            room_border_floor = []
+            for ry in range(y, y + h):
+                for rx in range(x, x + w):
+                    if self.grid[ry, rx] != Tile.FLOOR:
+                        continue
+                    if rx not in {x, x + w - 1} and ry not in {y, y + h - 1}:
+                        continue
+                    room_border_floor.append((ry, rx))
+
+            if not room_border_floor:
                 continue
 
-            room_max_hides = self._room_hide_max(room, len(room_floor))
+            room_max_hides = self._room_hide_max(room, len(room_border_floor))
             hide_counts = list(range(room_max_hides + 1))
             hide_probs = self.hide_count_distribution(room_max_hides)
             n_hide_room = int(self.np_rng.choice(hide_counts, p=hide_probs))
             if n_hide_room <= 0:
                 continue
 
-            for hy, hx in self.rng.sample(room_floor, min(n_hide_room, len(room_floor))):
+            for hy, hx in self.rng.sample(room_border_floor, min(n_hide_room, len(room_border_floor))):
                 # Don't overwrite special tiles (spawns, exit)
                 if (hx, hy) not in special_tiles:
                     self.grid[hy, hx] = Tile.HIDE
