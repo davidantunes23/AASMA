@@ -1,54 +1,58 @@
 import heapq
-import numpy as np
-from collections import deque
-from enum import Enum, auto
 from dataclasses import dataclass, field
+from enum import Enum, auto
 from typing import Optional
 
+import numpy as np
+
 # Tile type identifiers (must match map_generator.Tile enum)
-WALL         = 0  # Impassable barrier
-FLOOR        = 1  # Traversable corridor
-VENT         = 2  # Traversable vent (teleport mechanism)
-HIDE         = 3  # Hiding spot (blocks alien FOV, walkable by player)
+WALL = 0  # Impassable barrier
+FLOOR = 1  # Traversable corridor
+VENT = 2  # Traversable vent (teleport mechanism)
+HIDE = 3  # Hiding spot (blocks alien FOV, walkable by player)
 PLAYER_START = 4  # Starting position for player
-ALIEN_START  = 5  # Starting position for alien
-EXIT         = 6  # Goal location for player
+ALIEN_START = 5  # Starting position for alien
+EXIT = 6  # Goal location for player
 # Knowledge map markers
-UNKNOWN      = -1  # Never observed before
-PLAYER_SEEN  = -2  # Position where player was previously observed
+UNKNOWN = -1  # Never observed before
+PLAYER_SEEN = -2  # Position where player was previously observed
 
 # Movement passability sets
-PASSABLE_ALIEN  = {FLOOR, VENT, PLAYER_START, ALIEN_START, EXIT}  # Alien can walk through these
+PASSABLE_ALIEN = {FLOOR, VENT, PLAYER_START, ALIEN_START, EXIT}  # Alien can walk through these
 PASSABLE_PLAYER = {FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT}  # Player can walk through these
 
 # Cardinal directions: right, left, down, up
 DIRS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
 
+
 # Alien behavior states
 class AlienState(Enum):
     # SEARCH: explore areas with gaps in knowledge map
-    SEARCH      = auto()
+    SEARCH = auto()
     # INVESTIGATE: player was seen here; return to check again
     INVESTIGATE = auto()
     # HUNT: player currently visible in FOV; active pursuit
-    HUNT        = auto()
+    HUNT = auto()
+
 
 # Movement speed per state (cells per step)
 SPEED = {
-    AlienState.SEARCH:      1,  # Cautious exploration pace
+    AlienState.SEARCH: 1,  # Cautious exploration pace
     AlienState.INVESTIGATE: 1,  # Careful investigation pace
-    AlienState.HUNT:        2,  # Speed burst when player visible
+    AlienState.HUNT: 2,  # Speed burst when player visible
 }
 
 # Vent teleportation thresholds
 VENT_ROUTE_MIN_SOUND_DISTANCE = 8  # Only teleport if sound is 8+ cells away
-VENT_ROUTE_MIN_SAVINGS = 4         # Vent route must save 4+ steps vs direct path
-VENT_TELEPORT_COST = 0             # Step cost for a vent teleport (0 = instant)
+VENT_ROUTE_MIN_SAVINGS = 4  # Vent route must save 4+ steps vs direct path
+VENT_TELEPORT_COST = 0  # Step cost for a vent teleport (0 = instant)
+
 
 # Pathfinding utilities
 def heuristic(a, b):
     # Manhattan distance for A* heuristic (admissible and consistent)
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
 
 def astar(grid, start, goal, passable):
     # A* pathfinding with Manhattan distance heuristic
@@ -86,6 +90,7 @@ def astar(grid, start, goal, passable):
                 heapq.heappush(open_set, (ng + heuristic(nb, goal), nb))
     return []
 
+
 # Field of view computation using ray-casting
 def compute_fov(grid, origin, radius):
     # Ray-cast FOV within Manhattan radius
@@ -108,14 +113,17 @@ def compute_fov(grid, origin, radius):
                 ix = round(ox + dx * s / steps)
                 iy = round(oy + dy * s / steps)
                 if not (0 <= ix < W and 0 <= iy < H):
-                    blocked = True; break
+                    blocked = True
+                    break
                 cell = (ix, iy)
                 visible.add(cell)
                 if grid[iy, ix] in LOS_BLOCKERS and cell != (tx, ty):
-                    blocked = True; break
+                    blocked = True
+                    break
             if not blocked:
                 visible.add((tx, ty))
     return visible
+
 
 # Bayesian probability map for player location estimation
 class BeliefMap:
@@ -170,7 +178,7 @@ class BeliefMap:
             self.belief[player_pos[1], player_pos[0]] = 1.0
         else:
             # Eliminate cells that are visible and not hiding spots
-            for (vx, vy) in visible:
+            for vx, vy in visible:
                 if self.grid[vy, vx] != HIDE:
                     self.belief[vy, vx] = 0.0
         self._norm()
@@ -199,12 +207,12 @@ class KnowledgeMap:
     def update_from_observation(self, visible_cells, grid_map, player_pos, player_visible, player_hiding):
         # Record all tiles from FOV into knowledge map
         # Mark PLAYER_SEEN where player was observed (if visible and not hiding)
-        for (vx, vy) in visible_cells:
+        for vx, vy in visible_cells:
             if 0 <= vy < grid_map.shape[0] and 0 <= vx < grid_map.shape[1]:
                 self.knowledge[vy, vx] = int(grid_map[vy, vx])
                 if grid_map[vy, vx] == VENT:
                     self.seen_vents.add((vx, vy))
-        
+
         # Mark player if visible
         if player_visible and not player_hiding and player_pos:
             px, py = player_pos
@@ -219,8 +227,7 @@ class KnowledgeMap:
         for y in range(H):
             for x in range(W):
                 # Cell must be known and passable
-                if self.knowledge[y, x] not in (UNKNOWN, PLAYER_SEEN) and \
-                   self.grid[y, x] in PASSABLE_ALIEN:
+                if self.knowledge[y, x] not in (UNKNOWN, PLAYER_SEEN) and self.grid[y, x] in PASSABLE_ALIEN:
                     # Check if it has unknown neighbors
                     for dx, dy in DIRS:
                         nx, ny = x + dx, y + dy
@@ -259,8 +266,7 @@ def build_waypoints(grid, n=6, seed=0):
     # Provides fallback patrol route when no other objectives are available
     rng = np.random.default_rng(seed)
     H, W = grid.shape
-    cands = [(x, y) for y in range(H) for x in range(W)
-             if grid[y, x] in PASSABLE_ALIEN]
+    cands = [(x, y) for y in range(H) for x in range(W) if grid[y, x] in PASSABLE_ALIEN]
     if not cands:
         return []
     cands = np.array(cands)
@@ -279,7 +285,7 @@ def build_waypoints(grid, n=6, seed=0):
 @dataclass
 class AlienAgent:
     # Opponent agent with adaptive behavior and strategic vent usage
-    # 
+    #
     # Perception:
     #   - Visual FOV: ray-cast with HIDE/WALL blocking line-of-sight
     #   - Auditory: hears noise at uncertain position from game events
@@ -302,24 +308,24 @@ class AlienAgent:
     #   start_pos: (x, y) starting position
     #   fov_radius: Manhattan distance of vision
     #   replan_every: replans A* path every N steps (default 3)
-    grid:        np.ndarray
-    start_pos:   tuple
-    fov_radius:  int = 6
+    grid: np.ndarray
+    start_pos: tuple
+    fov_radius: int = 6
     replan_every: int = 3
 
-    pos:              tuple      = field(init=False)
-    state:            AlienState = field(init=False)
-    knowledge:        KnowledgeMap = field(init=False)
-    belief:           BeliefMap = field(init=False)  # Bayesian belief over player position
-    last_known_pos:   Optional[tuple] = field(init=False)
-    last_heard_pos:   Optional[tuple] = field(init=False)  # Last position where alien heard noise
+    pos: tuple = field(init=False)
+    state: AlienState = field(init=False)
+    knowledge: KnowledgeMap = field(init=False)
+    belief: BeliefMap = field(init=False)  # Bayesian belief over player position
+    last_known_pos: Optional[tuple] = field(init=False)
+    last_heard_pos: Optional[tuple] = field(init=False)  # Last position where alien heard noise
     steps_since_heard: int = field(init=False)  # Track how old the heard evidence is
-    path:             list       = field(init=False)
-    waypoints:        list       = field(init=False)
-    wp_idx:           int        = field(init=False)
-    steps_no_replan:  int        = field(init=False)
-    steps_in_state:   int        = field(init=False)
-    history:          list       = field(init=False)
+    path: list = field(init=False)
+    waypoints: list = field(init=False)
+    wp_idx: int = field(init=False)
+    steps_no_replan: int = field(init=False)
+    steps_in_state: int = field(init=False)
+    history: list = field(init=False)
 
     def __post_init__(self):
         # Initialize state after dataclass construction
@@ -327,19 +333,19 @@ class AlienAgent:
 
     def reset(self, start_pos=None):
         # Reset agent to initial state for new game/episode
-        self.pos            = start_pos or self.start_pos
-        self.state          = AlienState.SEARCH  # Start by searching unknown areas
-        self.knowledge      = KnowledgeMap(self.grid)  # Empty knowledge of map
-        self.belief         = BeliefMap(self.grid)  # Uniform prior over player location
+        self.pos = start_pos or self.start_pos
+        self.state = AlienState.SEARCH  # Start by searching unknown areas
+        self.knowledge = KnowledgeMap(self.grid)  # Empty knowledge of map
+        self.belief = BeliefMap(self.grid)  # Uniform prior over player location
         self.last_known_pos = None  # No player sighting yet
         self.last_heard_pos = None  # No sound heard yet
         self.steps_since_heard = 0  # Time since last auditory evidence
-        self.path           = []  # No current A* path
-        self.waypoints      = build_waypoints(self.grid)  # Patrol route for SEARCH
-        self.wp_idx         = 0  # Current waypoint index
+        self.path = []  # No current A* path
+        self.waypoints = build_waypoints(self.grid)  # Patrol route for SEARCH
+        self.wp_idx = 0  # Current waypoint index
         self.steps_no_replan = 0  # Steps since last A* replan
-        self.steps_in_state  = 0  # Steps in current state
-        self.history         = []  # Step-by-step record for analysis
+        self.steps_in_state = 0  # Steps in current state
+        self.history = []  # Step-by-step record for analysis
         self.vent_teleport_used = False  # Flag if teleported this step
 
     def step(self, player_pos: tuple, heard_pos: tuple = None, step_num: int = 0) -> tuple:
@@ -355,7 +361,7 @@ class AlienAgent:
         # Distinguish between exact player position (for FOV) and heard noise position (for auditory tracking)
         if heard_pos is None:
             heard_pos = player_pos
-        
+
         # AUDITORY EVIDENCE TRACKING
         # Detect when a noise is heard distinct from exact player position
         sound_detected = heard_pos != player_pos
@@ -370,19 +376,19 @@ class AlienAgent:
             self.steps_since_heard += 1
             if self.steps_since_heard > 5:
                 self.last_heard_pos = None  # Forget sounds older than 5 steps
-        
+
         # STEP 1: VISUAL PERCEPTION
         # Compute FOV from current position and check if player is visible
-        fov           = compute_fov(self.grid, self.pos, self.fov_radius)
-        px, py        = player_pos
-        in_fov        = (px, py) in fov
+        fov = compute_fov(self.grid, self.pos, self.fov_radius)
+        px, py = player_pos
+        in_fov = (px, py) in fov
         player_hiding = in_fov and self.grid[py, px] == HIDE  # Player in HIDE tile not visible
-        player_seen   = in_fov and not player_hiding  # Visible only if in FOV and not hiding
+        player_seen = in_fov and not player_hiding  # Visible only if in FOV and not hiding
 
         # STEP 2: UPDATE KNOWLEDGE MAP
         # Record all observed tiles from FOV into knowledge map
         self.knowledge.update_from_observation(fov, self.grid, player_pos, player_seen, player_hiding)
-        
+
         # STEP 3: UPDATE BELIEF MAP WITH AUDITORY EVIDENCE
         # When noise is heard, boost belief probability around heard location
         if sound_detected:
@@ -395,7 +401,7 @@ class AlienAgent:
                         if 0 <= nx < self.grid.shape[1] and 0 <= ny < self.grid.shape[0]:
                             if self.grid[ny, nx] in PASSABLE_PLAYER:
                                 self.belief.belief[ny, nx] += 0.1  # Increase belief at heard area
-        
+
         # Normalize belief back to probability distribution
         self.belief._norm()
 
@@ -426,18 +432,20 @@ class AlienAgent:
         # Track replanning counter
         self.steps_no_replan += 1
         # Record step for analysis and debugging
-        self.history.append({
-            "step":              step_num,
-            "state":             self.state.name,
-            "pos":               self.pos,
-            "player_seen":       player_seen,
-            "player_hiding":     player_hiding,
-            "speed":             steps,
-            "dist_to_player":    heuristic(self.pos, player_pos),
-            "heard_pos":         heard_pos if sound_detected else None,
-            "pursuing_sound":    self.last_heard_pos is not None,
-            "vent_teleport_used": self.vent_teleport_used,
-        })
+        self.history.append(
+            {
+                "step": step_num,
+                "state": self.state.name,
+                "pos": self.pos,
+                "player_seen": player_seen,
+                "player_hiding": player_hiding,
+                "speed": steps,
+                "dist_to_player": heuristic(self.pos, player_pos),
+                "heard_pos": heard_pos if sound_detected else None,
+                "pursuing_sound": self.last_heard_pos is not None,
+                "vent_teleport_used": self.vent_teleport_used,
+            }
+        )
         return self.pos
 
     def _get_explored_ratio(self, center: tuple, radius: int) -> float:
@@ -455,7 +463,7 @@ class AlienAgent:
                         total += 1
                         if self.knowledge.knowledge[ny, nx] != UNKNOWN:
                             explored += 1
-        
+
         return explored / total if total > 0 else 0.0
 
     def _transition(self, player_seen: bool, player_pos: tuple):
@@ -579,7 +587,7 @@ class AlienAgent:
             fallback_goal = self.last_known_pos
         else:  # SEARCH
             fallback_goal = self.last_heard_pos
-        
+
         greedy = self._greedy_step_toward(fallback_goal)
         if greedy is not None:
             return greedy
@@ -619,30 +627,40 @@ class AlienAgent:
         # Priority hierarchy determines goal based on available information
         # DEFAULT: stay put
         goal = self.pos
-        
+
         # PRIORITY 1: HUNT - Player is visible
         if self.state == AlienState.HUNT:
             goal = player_pos
-        
+
         # PRIORITY 2: SOUND PURSUIT - Recent auditory evidence
         elif self.last_heard_pos is not None and self.steps_since_heard <= 5:
             current_is_vent = self.grid[self.pos[1], self.pos[0]] == VENT
             best_sound_vent = self._best_seen_vent_route_for_sound(self.last_heard_pos)
-            
+
+            sound_x, sound_y = self.last_heard_pos
+            if self.knowledge.knowledge[sound_y, sound_x] == UNKNOWN:
+                frontiers = self.knowledge.get_unknown_frontier()
+                if frontiers:
+                    target_goal = min(frontiers, key=lambda f: heuristic(f, self.last_heard_pos))
+                else:
+                    target_goal = self.last_heard_pos
+            else:
+                target_goal = self.last_heard_pos
+
             if not current_is_vent:
-                # Not on vent: move to beneficial vent or directly to sound
+                # Not on vent: move to beneficial vent or directly to sound target
                 if best_sound_vent is not None:
                     goal = best_sound_vent  # Intermediate goal: reach vent
                 else:
-                    goal = self.last_heard_pos  # Direct pursuit of sound
+                    goal = target_goal  # Direct pursuit of sound target
             else:
-                # Already on vent: pursue sound directly (teleport will happen separately)
-                goal = self.last_heard_pos
-        
+                # Already on vent: pursue sound target directly (teleport will happen separately)
+                goal = target_goal
+
         # PRIORITY 3: INVESTIGATE - Check last known player position
         elif self.state == AlienState.INVESTIGATE:
             goal = self.last_known_pos or self.pos
-        
+
         # PRIORITY 4: SEARCH - Explore unknown areas
         else:  # SEARCH state
             # Sub-priorities for exploration:

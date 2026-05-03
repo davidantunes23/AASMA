@@ -1,8 +1,9 @@
 from collections import deque
 
 import numpy as np
+
 from agents.alien import AlienAgent
-from agents.human import HumanAgent, Action, Direction
+from agents.human import Action, Direction, HumanAgent
 from map_generator import Tile
 
 
@@ -120,9 +121,9 @@ class Game:
         # BUT: player produces no sound if hiding
         heard_pos = (human_x, human_y)  # Default: exact position
         if not self.human_agent.hidden and np.random.random() < self.p_noise:
-            # Noise occurs! Add uncertainty (±1 to ±2 cells)
-            noise_offset_x = np.random.randint(-2, 3)  # -2, -1, 0, 1, 2
-            noise_offset_y = np.random.randint(-2, 3)
+            # Noise occurs! Add uncertainty
+            noise_offset_x = np.random.randint(-4, 5)  # -5 to +5
+            noise_offset_y = np.random.randint(-4, 5)
             heard_x = max(0, min(human_x + noise_offset_x, self.map.shape[1] - 1))
             heard_y = max(0, min(human_y + noise_offset_y, self.map.shape[0] - 1))
             heard_pos = (heard_x, heard_y)
