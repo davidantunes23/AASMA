@@ -17,15 +17,16 @@ Alpha parameter  alpha in [-1, +1]:
     alpha > 0  -> alien-favoured   (more vents, fewer hiding spots per room)
 """
 
-import random
-import json
-import os
 import argparse
+import json
 import math
-from enum import IntEnum
+import os
+import random
 from collections import deque
+from enum import IntEnum
 
 import numpy as np
+
 
 # ── Tile constants ──────────────────────────────────────────────────────────────
 class Tile(IntEnum):
@@ -37,19 +38,25 @@ class Tile(IntEnum):
     ALIEN_START = 5
     EXIT = 6
 
+
 TILE_CHAR = {
-    Tile.WALL:         "##",
-    Tile.FLOOR:        "  ",
-    Tile.VENT:         "VV",
-    Tile.HIDE:         "HH",
+    Tile.WALL: "##",
+    Tile.FLOOR: "  ",
+    Tile.VENT: "VV",
+    Tile.HIDE: "HH",
     Tile.PLAYER_START: "PP",
-    Tile.ALIEN_START:  "AA",
-    Tile.EXIT:         "EE",
+    Tile.ALIEN_START: "AA",
+    Tile.EXIT: "EE",
 }
 
 TILE_NAME = {
-    Tile.WALL: "wall", Tile.FLOOR: "floor", Tile.VENT: "vent",
-    Tile.HIDE: "hide", Tile.PLAYER_START: "player", Tile.ALIEN_START: "alien", Tile.EXIT: "exit",
+    Tile.WALL: "wall",
+    Tile.FLOOR: "floor",
+    Tile.VENT: "vent",
+    Tile.HIDE: "hide",
+    Tile.PLAYER_START: "player",
+    Tile.ALIEN_START: "alien",
+    Tile.EXIT: "exit",
 }
 
 
@@ -103,9 +110,9 @@ class MapGenerator:
         self.grid: np.ndarray | None = None
         self.rooms: list[tuple] = []
         self.player_pos: tuple | None = None
-        self.alien_pos:  tuple | None = None
-        self.exit_pos:   tuple | None = None
-        self.metadata:   dict = {}
+        self.alien_pos: tuple | None = None
+        self.exit_pos: tuple | None = None
+        self.metadata: dict = {}
 
     # ── Tile behaviour from alpha ───────────────────────────────────────────────
     @property
@@ -198,14 +205,18 @@ class MapGenerator:
         with open(path) as f:
             data = json.load(f)
         m = data["metadata"]
-        gen = cls(width=m["width"], height=m["height"],
-                  alpha=m["alpha"], seed=m["seed"],
-                  max_hides_per_room=m.get("hide_max_per_room", 3))
+        gen = cls(
+            width=m["width"],
+            height=m["height"],
+            alpha=m["alpha"],
+            seed=m["seed"],
+            max_hides_per_room=m.get("hide_max_per_room", 3),
+        )
         gen.grid = np.array(data["grid"], dtype=np.int8)
         gen.metadata = m
         gen.player_pos = tuple(m["player_start"])
-        gen.alien_pos  = tuple(m["alien_start"])
-        gen.exit_pos   = tuple(m["exit_pos"])
+        gen.alien_pos = tuple(m["alien_start"])
+        gen.exit_pos = tuple(m["exit_pos"])
         return gen
 
     # ── Room placement ──────────────────────────────────────────────────────────
@@ -215,17 +226,16 @@ class MapGenerator:
             attempts += 1
             w = self.rng.randint(self.min_room_size, self.max_room_size)
             h = self.rng.randint(self.min_room_size, self.max_room_size)
-            x = self.rng.randint(1, self.width  - w - 1)
+            x = self.rng.randint(1, self.width - w - 1)
             y = self.rng.randint(1, self.height - h - 1)
             if not self._overlaps(x, y, w, h):
-                self.grid[y:y+h, x:x+w] = Tile.FLOOR
+                self.grid[y : y + h, x : x + w] = Tile.FLOOR
                 self.rooms.append((x, y, w, h))
 
     def _overlaps(self, x, y, w, h) -> bool:
         pad = 1
-        for (rx, ry, rw, rh) in self.rooms:
-            if (x < rx + rw + pad and x + w + pad > rx and
-                    y < ry + rh + pad and y + h + pad > ry):
+        for rx, ry, rw, rh in self.rooms:
+            if x < rx + rw + pad and x + w + pad > rx and y < ry + rh + pad and y + h + pad > ry:
                 return True
         return False
 
@@ -270,12 +280,15 @@ class MapGenerator:
 
         px, py = centres[0]
         ax, ay = centres[-1]
-        mid    = len(centres) // 2
+        mid = len(centres) // 2
         ex, ey = centres[mid]
 
-        self.grid[py, px] = Tile.PLAYER_START;  self.player_pos = (px, py)
-        self.grid[ay, ax] = Tile.ALIEN_START;   self.alien_pos  = (ax, ay)
-        self.grid[ey, ex] = Tile.EXIT;          self.exit_pos   = (ex, ey)
+        self.grid[py, px] = Tile.PLAYER_START
+        self.player_pos = (px, py)
+        self.grid[ay, ax] = Tile.ALIEN_START
+        self.alien_pos = (ax, ay)
+        self.grid[ey, ex] = Tile.EXIT
+        self.exit_pos = (ex, ey)
 
         # Track special tile positions to avoid overwriting them
         special_tiles = {(px, py), (ax, ay), (ex, ey)}
@@ -344,8 +357,8 @@ class MapGenerator:
 
     def _bfs_reachable(self, start, passable) -> set:
         visited = {start}
-        queue   = deque([start])
-        dirs    = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        queue = deque([start])
+        dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         while queue:
             cx, cy = queue.popleft()
             for dx, dy in dirs:
@@ -360,8 +373,8 @@ class MapGenerator:
         if start is None or goal is None:
             return None
         visited = {start}
-        queue   = deque([(start, 0)])
-        dirs    = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        queue = deque([(start, 0)])
+        dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
         while queue:
             (cx, cy), d = queue.popleft()
             if (cx, cy) == goal:
@@ -373,7 +386,7 @@ class MapGenerator:
                         visited.add((nx, ny))
                         queue.append(((nx, ny), d + 1))
         return None
-            
+
     # ── Metadata ────────────────────────────────────────────────────────────────
     def _compute_metadata(self):
         total = self.width * self.height
@@ -381,34 +394,32 @@ class MapGenerator:
         counts = {int(k): int(v) for k, v in zip(uniq, cnts)}
 
         passable = {Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT}
-        d_pe = self._bfs_distance(self.player_pos, self.exit_pos,  passable)
-        d_ae = self._bfs_distance(self.alien_pos,  self.exit_pos,  passable)
-        d_ap = self._bfs_distance(self.alien_pos,  self.player_pos, passable)
+        d_pe = self._bfs_distance(self.player_pos, self.exit_pos, passable)
+        d_ae = self._bfs_distance(self.alien_pos, self.exit_pos, passable)
+        d_ap = self._bfs_distance(self.alien_pos, self.player_pos, passable)
 
         open_tiles = sum(counts.get(t, 0) for t in passable)
 
         self.metadata = {
-            "seed":              self.seed,
-            "alpha":             self.alpha,
-            "width":             self.width,
-            "height":            self.height,
-            "n_rooms":           len(self.rooms),
+            "seed": self.seed,
+            "alpha": self.alpha,
+            "width": self.width,
+            "height": self.height,
+            "n_rooms": len(self.rooms),
             "hide_max_per_room": self.max_hides_per_room,
-            "hide_distribution":  [round(p, 4) for p in self.hide_count_distribution(self.max_hides_per_room)],
+            "hide_distribution": [round(p, 4) for p in self.hide_count_distribution(self.max_hides_per_room)],
             "hide_room_max_mode": "scaled_by_room_area",
-            "tile_counts":       {TILE_NAME[k]: v for k, v in counts.items() if k in TILE_NAME},
-            "open_ratio":        round(open_tiles / total, 4),
-            "vent_ratio":        round(counts.get(Tile.VENT, 0) / len(self.rooms), 4),
-            "hide_number":        counts.get(Tile.HIDE, 0),
-            "player_start":      list(self.player_pos),
-            "alien_start":       list(self.alien_pos),
-            "exit_pos":          list(self.exit_pos),
-            "dist_player_exit":  d_pe,
-            "dist_alien_exit":   d_ae,
+            "tile_counts": {TILE_NAME[k]: v for k, v in counts.items() if k in TILE_NAME},
+            "open_ratio": round(open_tiles / total, 4),
+            "vent_ratio": round(counts.get(Tile.VENT, 0) / len(self.rooms), 4),
+            "hide_number": counts.get(Tile.HIDE, 0),
+            "player_start": list(self.player_pos),
+            "alien_start": list(self.alien_pos),
+            "exit_pos": list(self.exit_pos),
+            "dist_player_exit": d_pe,
+            "dist_alien_exit": d_ae,
             "dist_alien_player": d_ap,
-            "computed_alpha":    round(
-                (counts.get(Tile.VENT, 0) - counts.get(Tile.HIDE, 0)) / max(total, 1), 4
-            ),
+            "computed_alpha": round((counts.get(Tile.VENT, 0) - counts.get(Tile.HIDE, 0)) / max(total, 1), 4),
         }
 
 
@@ -439,8 +450,10 @@ class MapPool:
         alphas = np.linspace(self.alpha_range[0], self.alpha_range[1], self.n_maps)
         for i, alpha in enumerate(alphas):
             gen = MapGenerator(
-                width=self.width, height=self.height,
-                alpha=float(alpha), seed=seed_offset + i,
+                width=self.width,
+                height=self.height,
+                alpha=float(alpha),
+                seed=seed_offset + i,
                 **self.kwargs,
             )
             gen.generate()
@@ -464,36 +477,31 @@ def visualise_pygame(gen: MapGenerator, cell: int = 24):
     Press ESC or close the window to exit.
     Requires: pip install pygame
     """
-    try:
-        import pygame
-    except ImportError:
-        print("pygame not installed — run: pip install pygame")
-        return
+
+    import pygame
 
     COLORS = {
-        Tile.WALL:         ( 20,  20,  30),
-        Tile.FLOOR:        ( 55,  55,  75),
-        Tile.VENT:         (170,  90, 210),
-        Tile.HIDE:         ( 60, 160,  80),
-        Tile.PLAYER_START: ( 50, 150, 230),
-        Tile.ALIEN_START:  (210,  50,  50),
-        Tile.EXIT:         (230, 190,  40),
+        Tile.WALL: (20, 20, 30),
+        Tile.FLOOR: (55, 55, 75),
+        Tile.VENT: (170, 90, 210),
+        Tile.HIDE: (60, 160, 80),
+        Tile.PLAYER_START: (50, 150, 230),
+        Tile.ALIEN_START: (210, 50, 50),
+        Tile.EXIT: (230, 190, 40),
     }
     LABELS = {
-        Tile.VENT:         "V",
-        Tile.HIDE:         "H",
+        Tile.VENT: "V",
+        Tile.HIDE: "H",
         Tile.PLAYER_START: "P",
-        Tile.ALIEN_START:  "A",
-        Tile.EXIT:         "E",
+        Tile.ALIEN_START: "A",
+        Tile.EXIT: "E",
     }
 
     W, H = gen.width * cell, gen.height * cell
     pygame.init()
     font = pygame.font.SysFont(None, int(cell * 0.65))
     screen = pygame.display.set_mode((W, H))
-    pygame.display.set_caption(
-        f"Map  seed={gen.seed}  alpha={gen.alpha:+.2f}  |  ESC to quit"
-    )
+    pygame.display.set_caption(f"Map  seed={gen.seed}  alpha={gen.alpha:+.2f}  |  ESC to quit")
     clock = pygame.time.Clock()
     running = True
 
@@ -507,9 +515,9 @@ def visualise_pygame(gen: MapGenerator, cell: int = 24):
         screen.fill((0, 0, 0))
         for y in range(gen.height):
             for x in range(gen.width):
-                tile  = int(gen.grid[y, x])
+                tile = int(gen.grid[y, x])
                 color = COLORS.get(tile, (255, 0, 255))
-                rect  = pygame.Rect(x * cell, y * cell, cell - 1, cell - 1)
+                rect = pygame.Rect(x * cell, y * cell, cell - 1, cell - 1)
                 pygame.draw.rect(screen, color, rect)
 
                 if tile in LABELS:
@@ -595,12 +603,12 @@ if __name__ == "__main__":
         help="Map height in cells (default: 20)",
     )
     args = parser.parse_args()
-    
+
     # Override demo to use specified dimensions
     seed = args.seed
     if seed is None:
         seed = random.randint(0, 2**31 - 1)
-    
+
     print()
     print("=" * 70)
     print(f"  BALANCED  (alpha = 0.0, seed = {seed})  [{args.width}x{args.height}]")

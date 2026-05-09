@@ -6,23 +6,20 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-import sys
 
 import matplotlib
-
-if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-    matplotlib.use("Agg")
-
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.colors import ListedColormap
-import numpy as np
 
 try:
     from agents.alien import AlienAgent, compute_fov
-    from agents.human import Direction as HumanDirection, HumanAgent
+    from agents.human import Direction as HumanDirection
+    from agents.human import HumanAgent
     from game import Game
     from map_generator import MapGenerator, Tile
 except ModuleNotFoundError:
@@ -31,7 +28,8 @@ except ModuleNotFoundError:
     if project_root_str not in sys.path:
         sys.path.insert(0, project_root_str)
     from agents.alien import AlienAgent, compute_fov
-    from agents.human import Direction as HumanDirection, HumanAgent
+    from agents.human import Direction as HumanDirection
+    from agents.human import HumanAgent
     from game import Game
     from map_generator import MapGenerator, Tile
 
@@ -47,7 +45,7 @@ class FrameState:
     human_sees_alien: bool = False
     alien_sees_human: bool = False
     radar_threat: str | None = None  # CRITICAL, CLOSE, NEAR, FAR
-    radar_dist: int | None = None    # Actual Manhattan distance
+    radar_dist: int | None = None  # Actual Manhattan distance
     noise_ripple_pos: tuple[int, int] | None = None  # Position of heard noise
     alien_heard_pos: tuple[int, int] | None = None  # Where alien heard the sound
     alien_pursuing: bool = False  # Is alien actively pursuing sound
@@ -83,16 +81,16 @@ def run_simulation(
         human_pos_xy = (game.human_pos[1], game.human_pos[0])
         alien_fov = compute_fov(game.alien_agent.grid, alien_pos_xy, game.alien_agent.fov_radius)
         alien_sees_human = human_pos_xy in alien_fov and not human_hidden
-        
+
         # Capture radar and noise info
-        radar_threat = getattr(game, 'last_radar_threat', None)
-        radar_dist = getattr(game, 'last_radar_dist', None)
+        radar_threat = getattr(game, "last_radar_threat", None)
+        radar_dist = getattr(game, "last_radar_dist", None)
         noise_ripple = game.last_noise_ripple
-        
+
         # Capture alien clues (where alien heard sound)
         alien_heard = game.alien_agent.last_heard_pos
         alien_pursuing = alien_heard is not None and game.alien_agent.steps_since_heard <= 5
-        
+
         frames.append(
             FrameState(
                 step=step,
@@ -201,7 +199,7 @@ def visualize(
     alien_known_marker = ax_known.scatter(
         [ax], [ay], s=95, c="#FF4D6D", edgecolors="white", linewidths=0.7, marker="X", zorder=5
     )
-    
+
     # Markers on belief map: alien position and player
     alien_belief_marker = ax_belief.scatter(
         [ax], [ay], s=95, c="#FF4D6D", edgecolors="white", linewidths=0.7, marker="X", zorder=5
@@ -226,22 +224,26 @@ def visualize(
     # Display threat level color circle around player
     radar_threat_circle = plt.Circle((hx, hy), 0.6, fill=True, zorder=4)
     ax_world.add_patch(radar_threat_circle)
-    
+
     # === NOISE RIPPLE VISUALIZATION ===
     # Show expanding ripple when sound is heard
     noise_ripple_circles = [
-        plt.Circle((hx, hy), 0.3, fill=False, edgecolor='yellow', linewidth=1.5, zorder=3, linestyle='--'),
-        plt.Circle((hx, hy), 0.6, fill=False, edgecolor='yellow', linewidth=1.2, zorder=3, linestyle='--', alpha=0.6),
-        plt.Circle((hx, hy), 0.9, fill=False, edgecolor='yellow', linewidth=0.8, zorder=3, linestyle='--', alpha=0.3),
+        plt.Circle((hx, hy), 0.3, fill=False, edgecolor="yellow", linewidth=1.5, zorder=3, linestyle="--"),
+        plt.Circle((hx, hy), 0.6, fill=False, edgecolor="yellow", linewidth=1.2, zorder=3, linestyle="--", alpha=0.6),
+        plt.Circle((hx, hy), 0.9, fill=False, edgecolor="yellow", linewidth=0.8, zorder=3, linestyle="--", alpha=0.3),
     ]
     for circle in noise_ripple_circles:
         ax_known.add_patch(circle)
-    
+
     # === ALIEN HEARD LOCATION VISUALIZATION ===
     # Red dashed circle showing where alien heard the sound
-    alien_heard_circle = plt.Circle((hx, hy), 0.5, fill=False, edgecolor='#FF0000', linewidth=2.0, zorder=4, linestyle=':', alpha=0.8)
+    alien_heard_circle = plt.Circle(
+        (hx, hy), 0.5, fill=False, edgecolor="#FF0000", linewidth=2.0, zorder=4, linestyle=":", alpha=0.8
+    )
     ax_belief.add_patch(alien_heard_circle)
-    alien_heard_marker = ax_belief.scatter([hx], [hy], s=60, c='#FF0000', edgecolors='white', linewidths=0.5, marker='*', zorder=5, alpha=0.7)
+    alien_heard_marker = ax_belief.scatter(
+        [hx], [hy], s=60, c="#FF0000", edgecolors="white", linewidths=0.5, marker="*", zorder=5, alpha=0.7
+    )
     total_steps = len(frames) - 1
     status_text = fig.suptitle("", color="white", fontsize=12, x=0.02, ha="left", fontfamily="monospace")
 
@@ -262,10 +264,10 @@ def visualize(
         # === UPDATE RADAR THREAT INDICATOR COLOR ===
         threat_colors = {
             "CRITICAL": "#FF0000",  # Red
-            "CLOSE": "#FF8800",     # Orange
-            "NEAR": "#FFFF00",      # Yellow
-            "FAR": "#00FF00",       # Green
-            None: "#888888",        # Gray (no radar signal)
+            "CLOSE": "#FF8800",  # Orange
+            "NEAR": "#FFFF00",  # Yellow
+            "FAR": "#00FF00",  # Green
+            None: "#888888",  # Gray (no radar signal)
         }
         threat_color = threat_colors.get(state.radar_threat, "#888888")
         radar_threat_circle.set_center((hx0, hy0))
@@ -285,7 +287,7 @@ def visualize(
 
         alien_known_marker.set_visible(state.human_sees_alien)
         human_belief_marker.set_visible(state.alien_sees_human)
-        
+
         # === UPDATE NOISE RIPPLE POSITION AND VISIBILITY ===
         if state.noise_ripple_pos is not None:
             ny, nx = state.noise_ripple_pos
@@ -296,7 +298,7 @@ def visualize(
             # Hide ripples if no noise
             for circle in noise_ripple_circles:
                 circle.set_visible(False)
-        
+
         # === UPDATE ALIEN HEARD LOCATION ===
         if state.alien_heard_pos is not None:
             ahx, ahy = state.alien_heard_pos
@@ -314,7 +316,7 @@ def visualize(
 
         known = np.where(state.known_map == Game.UNSEEN_TILE, unknown_value, state.known_map)
         known_img.set_data(known)
-        
+
         # Update alien knowledge map display
         alien_known = state.alien_belief.copy()
         alien_known = np.where(alien_known == -1, unknown_value, alien_known)  # UNKNOWN
@@ -338,7 +340,23 @@ def visualize(
                 hidden="YES" if state.human_hidden else "NO",
             )
         )
-        return human_world_marker, alien_world_marker, human_known_marker, alien_known_marker, alien_belief_marker, human_belief_marker, hidden_world_ring, hidden_known_ring, known_img, belief_img, status_text, radar_threat_circle, *noise_ripple_circles, alien_heard_circle, alien_heard_marker
+        return (
+            human_world_marker,
+            alien_world_marker,
+            human_known_marker,
+            alien_known_marker,
+            alien_belief_marker,
+            human_belief_marker,
+            hidden_world_ring,
+            hidden_known_ring,
+            known_img,
+            belief_img,
+            status_text,
+            radar_threat_circle,
+            *noise_ripple_circles,
+            alien_heard_circle,
+            alien_heard_marker,
+        )
 
     animation = FuncAnimation(
         fig,
@@ -360,7 +378,7 @@ def visualize(
             print("Interactive display not detected; skipping window preview.")
             plt.close(fig)
             return
-        if "agg" in backend:
+        if backend == "agg":
             print(f"Matplotlib backend '{matplotlib.get_backend()}' is non-interactive; skipping window preview.")
             plt.close(fig)
             return
@@ -384,7 +402,7 @@ def visualize_world_only(
     fig, ax = plt.subplots(1, 1, figsize=(8, 6), dpi=120)
     fig.patch.set_facecolor("#000000")
 
-    world_img = ax.imshow(grid, cmap=world_cmap, vmin=0, vmax=6)
+    ax.imshow(grid, cmap=world_cmap, vmin=0, vmax=6)
     ax.set_title("Game World", color="white", fontsize=13, fontweight="bold")
     ax.set_xticks([])
     ax.set_yticks([])
@@ -392,19 +410,17 @@ def visualize_world_only(
 
     hy, hx = frames[0].human_pos
     ay, ax_pos = frames[0].alien_pos
-    
-    human_marker = ax.scatter(
-        [hx], [hy], s=120, c="#00D4FF", edgecolors="white", linewidths=1.0, marker="o", zorder=5
-    )
+
+    human_marker = ax.scatter([hx], [hy], s=120, c="#00D4FF", edgecolors="white", linewidths=1.0, marker="o", zorder=5)
     alien_marker = ax.scatter(
         [ax_pos], [ay], s=120, c="#FF4D6D", edgecolors="white", linewidths=1.0, marker="X", zorder=5
     )
-    
+
     # Hidden indicator ring
     hidden_ring = ax.scatter(
         [hx], [hy], s=200, facecolors="none", edgecolors="#7CFF6B", linewidths=2.0, marker="o", zorder=4
     )
-    
+
     # Exit marker
     exit_y, exit_x = find_tile_pos(grid, Tile.EXIT)
     ax.scatter([exit_x], [exit_y], s=100, c="#f39c12", marker="*", zorder=6)
@@ -420,14 +436,14 @@ def visualize_world_only(
         human_marker.set_offsets([[hx0, hy0]])
         alien_marker.set_offsets([[ax0, ay0]])
         hidden_ring.set_offsets([[hx0, hy0]])
-        
+
         if state.human_hidden:
             human_marker.set_facecolor("#7CFF6B")
             hidden_ring.set_visible(True)
         else:
             human_marker.set_facecolor("#00D4FF")
             hidden_ring.set_visible(False)
-        
+
         status_text.set_text(
             "Step {step:4d}/{total:4d} | Outcome: {outcome:<18} | "
             "Player(y,x)=({hy:3d},{hx:3d}) | Alien(y,x)=({ay:3d},{ax:3d}) | Hidden: {hidden:<3}".format(
@@ -459,7 +475,7 @@ def visualize_world_only(
     if show_window:
         has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
         backend = matplotlib.get_backend().lower()
-        if not has_display or "agg" in backend:
+        if not has_display or backend == "agg":
             plt.close(fig)
             return
         plt.show()
@@ -480,7 +496,7 @@ def parse_args() -> argparse.Namespace:
         help="Generate a different random map seed for this run",
     )
     parser.add_argument("--view-length", type=int, default=6, help="Human observation cone length")
-    parser.add_argument("--max-steps", type=int, default=220, help="Maximum simulation steps")
+    parser.add_argument("--max-steps", type=int, default=500, help="Maximum simulation steps")
     parser.add_argument("--fps", type=int, default=8, help="Animation frames per second")
     parser.add_argument(
         "--output",
@@ -543,7 +559,7 @@ def main():
 
     # Determine output path based on style
     output_path = args.output
-    
+
     if args.style == "world":
         # World-only visualization
         world_output = output_path.replace(".gif", "_world.gif")

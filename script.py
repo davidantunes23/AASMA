@@ -1,48 +1,45 @@
-
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.colors import ListedColormap, BoundaryNorm
 import argparse
-import numpy as np
-import json, os, sys
+import os
 import random
+import sys
+
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
+import numpy as np
 
 # ── make sure map_generator is importable ──────────────────────────────────────
 sys.path.insert(0, ".")
-from map_generator import (
-    MapGenerator, MapPool, Tile,
-)
+from map_generator import MapGenerator, Tile
 
 # ── Colour palette ─────────────────────────────────────────────────────────────
 TILE_COLORS = {
-    Tile.WALL:         "#1a1a2e",   # deep navy
-    Tile.FLOOR:        "#2e2e4a",   # dark slate
-    Tile.VENT:         "#9b59b6",   # purple
-    Tile.HIDE:         "#27ae60",   # green
-    Tile.PLAYER_START: "#2980b9",   # blue
-    Tile.ALIEN_START:  "#c0392b",   # red
-    Tile.EXIT:         "#f39c12",   # amber
+    Tile.WALL: "#1a1a2e",  # deep navy
+    Tile.FLOOR: "#2e2e4a",  # dark slate
+    Tile.VENT: "#9b59b6",  # purple
+    Tile.HIDE: "#27ae60",  # green
+    Tile.PLAYER_START: "#2980b9",  # blue
+    Tile.ALIEN_START: "#c0392b",  # red
+    Tile.EXIT: "#f39c12",  # amber
 }
 
 TILE_LABELS = {
-    Tile.WALL:         "Wall",
-    Tile.FLOOR:        "Floor",
-    Tile.VENT:         "Vent (alien shortcut)",
-    Tile.HIDE:         "Hiding Spot",
+    Tile.WALL: "Wall",
+    Tile.FLOOR: "Floor",
+    Tile.VENT: "Vent (alien shortcut)",
+    Tile.HIDE: "Hiding Spot",
     Tile.PLAYER_START: "Player Start",
-    Tile.ALIEN_START:  "Alien Start",
-    Tile.EXIT:         "Exit",
+    Tile.ALIEN_START: "Alien Start",
+    Tile.EXIT: "Exit",
 }
 
 TILE_SYMBOLS = {
-    Tile.VENT:         "V",
-    Tile.HIDE:         "H",
+    Tile.VENT: "V",
+    Tile.HIDE: "H",
     Tile.PLAYER_START: "P",
-    Tile.ALIEN_START:  "A",
-    Tile.EXIT:         "E",
+    Tile.ALIEN_START: "A",
+    Tile.EXIT: "E",
 }
+
 
 # ── Core visualiser ────────────────────────────────────────────────────────────
 def visualise_map(
@@ -57,7 +54,7 @@ def visualise_map(
 ):
     """
     Render a MapGenerator grid as a colour-coded matplotlib figure.
-    
+
     Parameters
     ----------
     gen          : MapGenerator with .grid populated
@@ -77,7 +74,7 @@ def visualise_map(
     for tile_id, hex_color in TILE_COLORS.items():
         r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
         mask = grid == tile_id
-        rgb[mask] = [r/255, g/255, b/255]
+        rgb[mask] = [r / 255, g / 255, b / 255]
 
     standalone = ax is None
     if standalone:
@@ -102,32 +99,35 @@ def visualise_map(
             ys, xs = np.where(grid == tile_id)
             for x, y in zip(xs, ys):
                 ax.text(
-                    x, y, symbol,
-                    ha="center", va="center",
-                    fontsize=sym_fontsize, fontweight="bold",
-                    color="white", alpha=0.92,
+                    x,
+                    y,
+                    symbol,
+                    ha="center",
+                    va="center",
+                    fontsize=sym_fontsize,
+                    fontweight="bold",
+                    color="white",
+                    alpha=0.92,
                 )
 
     # Title
     m = gen.metadata
     alpha_sign = "+" if gen.alpha >= 0 else ""
-    auto_title = (
-        f"Map  |  seed={gen.seed}  "
-        f"alpha={alpha_sign}{gen.alpha:.2f}  "
-        f"rooms={m.get('n_rooms', '?')}  "
-        f"{W}×{H}"
-    )
+    auto_title = f"Map  |  seed={gen.seed}  alpha={alpha_sign}{gen.alpha:.2f}  rooms={m.get('n_rooms', '?')}  {W}×{H}"
     if show_distances:
         sub = (
             f"P→exit: {m.get('dist_player_exit')} steps   "
             f"A→exit: {m.get('dist_alien_exit')} steps   "
             f"A→P: {m.get('dist_alien_player')} steps   "
-            f"vents: {m.get('vent_ratio',0):.1%}   "
-            f"hides: {m.get('hide_number',0)}"
+            f"vents: {m.get('vent_ratio', 0):.1%}   "
+            f"hides: {m.get('hide_number', 0)}"
         )
         ax.set_title(
             (title or auto_title) + "\n" + sub,
-            color="white", fontsize=9, pad=8, linespacing=1.6,
+            color="white",
+            fontsize=9,
+            pad=8,
+            linespacing=1.6,
         )
     else:
         ax.set_title(title or auto_title, color="white", fontsize=10, pad=8)
@@ -165,8 +165,7 @@ def visualise_map(
         plt.tight_layout(rect=[0, 0.08, 1, 1])
         if save_path:
             os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
-            fig.savefig(save_path, dpi=150, bbox_inches="tight",
-                        facecolor="#0d0d1a")
+            fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="#0d0d1a")
             print(f"Saved -> {save_path}")
         return fig, ax
 
@@ -187,7 +186,8 @@ def visualise_alpha_comparison(
     """
     n = len(alphas)
     fig, axes = plt.subplots(
-        1, n,
+        1,
+        n,
         figsize=(width * cell_size * n * 0.52, height * cell_size * 1.55),
         facecolor="#0d0d1a",
     )
@@ -206,10 +206,10 @@ def visualise_alpha_comparison(
             ax=ax,
         )
         ax.set_title(
-            f"alpha = {sign}{alpha:.1f}\n"
-            f"vents {gen.metadata['vent_ratio']:.1%}  "
-            f"hides {gen.metadata['hide_number']}",
-            color="white", fontsize=8, pad=5,
+            f"alpha = {sign}{alpha:.1f}\nvents {gen.metadata['vent_ratio']:.1%}  hides {gen.metadata['hide_number']}",
+            color="white",
+            fontsize=8,
+            pad=5,
         )
 
     # shared legend below
@@ -232,7 +232,9 @@ def visualise_alpha_comparison(
     )
     fig.suptitle(
         "Alien Isolation Map Generator  —  Alpha Advantage Comparison",
-        color="white", fontsize=11, y=1.01,
+        color="white",
+        fontsize=11,
+        y=1.01,
     )
     plt.tight_layout(rect=[0, 0.06, 1, 1])
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
@@ -255,7 +257,8 @@ def visualise_current_maps_comparison(
     width = maps[0].width
     height = maps[0].height
     fig, axes = plt.subplots(
-        1, n,
+        1,
+        n,
         figsize=(width * cell_size * n * 0.52, height * cell_size * 1.55),
         facecolor="#0d0d1a",
     )
@@ -272,10 +275,10 @@ def visualise_current_maps_comparison(
             ax=ax,
         )
         ax.set_title(
-            f"{label}\n"
-            f"vents {gen.metadata['vent_ratio']:.1%}  "
-            f"hides {gen.metadata['hide_number']}",
-            color="white", fontsize=8, pad=5,
+            f"{label}\nvents {gen.metadata['vent_ratio']:.1%}  hides {gen.metadata['hide_number']}",
+            color="white",
+            fontsize=8,
+            pad=5,
         )
 
     patches = [
@@ -297,7 +300,9 @@ def visualise_current_maps_comparison(
     )
     fig.suptitle(
         "Current Map Comparison",
-        color="white", fontsize=11, y=1.01,
+        color="white",
+        fontsize=11,
+        y=1.01,
     )
     plt.tight_layout(rect=[0, 0.06, 1, 1])
     os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
@@ -319,6 +324,7 @@ def render_saved_map(json_path: str, png_path: str):
     saved_map = MapGenerator.load(json_path)
     visualise_map(saved_map, save_path=png_path)
     return saved_map
+
 
 def run_demo(seed: int | None = None):
     if seed is None:

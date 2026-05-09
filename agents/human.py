@@ -1,7 +1,7 @@
-from enum import Enum
-from collections import deque
-from pathlib import Path
 import sys
+from collections import deque
+from enum import Enum
+from pathlib import Path
 
 import numpy as np
 
@@ -16,11 +16,13 @@ except ModuleNotFoundError as exc:
         sys.path.insert(0, project_root_str)
     from map_generator import Tile
 
+
 class Direction(Enum):
     NORTH = 1
     EAST = 2
     SOUTH = 3
     WEST = 4
+
 
 class Action(Enum):
     WALK = 1
@@ -142,10 +144,12 @@ class HumanAgent:
     def _integrate_observation(self, obs: np.ndarray):
         # Check if radar is currently active in observation
         radar_active = np.any(obs == self.RADAR_PING)
-        
+
         # Record all visible world tiles (floors, walls, exits, hiding spots) in memory
         # Exclude markers (UNKNOWN, ALIEN, RADAR_PING, NOISE_RIPPLE) from storage
-        visible_mask = (obs != self.UNKNOWN) & (obs != self.ALIEN) & (obs != self.RADAR_PING) & (obs != self.NOISE_RIPPLE)
+        visible_mask = (
+            (obs != self.UNKNOWN) & (obs != self.ALIEN) & (obs != self.RADAR_PING) & (obs != self.NOISE_RIPPLE)
+        )
         self._known_map[visible_mask] = obs[visible_mask]
 
         # Update hidden state by checking if current tile is a hiding spot
@@ -420,13 +424,13 @@ class HumanAgent:
         # Return all hiding spot tiles discovered in known map
         if self._known_map is None:
             return []
-        
+
         hiding_spots = []
         hy, hx = np.where(self._known_map == int(Tile.HIDE))
         for y, x in zip(hy, hx):
             hiding_spots.append((int(y), int(x)))
         return hiding_spots
-    
+
     def _get_closest_hiding_spot(self) -> tuple[int, int] | None:
         # Find the nearest reachable hiding spot using BFS distance
         hiding_spots = self._get_known_hiding_spots()
@@ -437,25 +441,23 @@ class HumanAgent:
         start = self.position
         if not self._in_bounds(*start):
             return None
-        
+
         # BFS explores from current position until a hiding spot is found
         frontier = deque([start])
         parents: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
-        
+
         while frontier:
             current = frontier.popleft()
 
             # Return first hiding spot encountered (guaranteed closest)
             if current in hiding_spots:
                 return current
-            
+
             # Expand to all walkable neighbors
             for neighbor, _ in self._walkable_neighbors(current):
                 if neighbor in parents:
                     continue
                 parents[neighbor] = current
                 frontier.append(neighbor)
-        
-        return None
 
-    
+        return None
