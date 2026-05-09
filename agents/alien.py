@@ -320,6 +320,7 @@ class AlienAgent:
     steps_no_replan:  int        = field(init=False)
     steps_in_state:   int        = field(init=False)
     history:          list       = field(init=False)
+    _rl_action_override: Optional[tuple] = field(init=False)
 
     def __post_init__(self):
         # Initialize state after dataclass construction
@@ -341,6 +342,7 @@ class AlienAgent:
         self.steps_in_state  = 0  # Steps in current state
         self.history         = []  # Step-by-step record for analysis
         self.vent_teleport_used = False  # Flag if teleported this step
+        self._rl_action_override = None  # Optional fixed movement delta from RL env
 
     def step(self, player_pos: tuple, heard_pos: tuple = None, step_num: int = 0) -> tuple:
         # Execute one step: perceive → update knowledge → state transition → move
@@ -421,7 +423,15 @@ class AlienAgent:
         # Move 1 cell (SEARCH/INVESTIGATE) or 2 cells (HUNT) based on state
         steps = SPEED[self.state]
         for _ in range(steps):
-            self.pos = self._move_one(player_pos, player_seen)
+            if self._rl_action_override is not None:
+                dx, dy = self._rl_action_override
+                x, y = self.pos
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < self.grid.shape[1] and 0 <= ny < self.grid.shape[0] and self.grid[ny, nx] in PASSABLE_ALIEN:
+                    self.pos = (nx, ny)
+                # If blocked, stay in place for this movement tick
+            else:
+                self.pos = self._move_one(player_pos, player_seen)
 
         # Track replanning counter
         self.steps_no_replan += 1

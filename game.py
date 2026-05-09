@@ -138,7 +138,21 @@ class Game:
         
         # Pass heard position to alien (noisy auditory evidence)
         # But alien also gets exact visual observation from FOV
-        alien_x, alien_y = self.alien_agent.step((human_x, human_y), heard_pos, self.step_num)
+        override = getattr(self.alien_agent, '_rl_action_override', None)
+        if override is not None:
+            # RL controls movement — still call step() to update belief/state/FOV
+            self.alien_agent.step((human_x, human_y), heard_pos, self.step_num)
+            # Now override the position the rule-based step just chose
+            dx, dy = override          # (dx, dy) in (x, y) space
+            ox, oy = self.alien_agent.pos
+            nx, ny = ox + dx, oy + dy
+            if (0 <= ny < self.map.shape[0] and 0 <= nx < self.map.shape[1]
+                    and self.map[ny, nx] != Tile.WALL):
+                self.alien_agent.pos = (nx, ny)
+            alien_x, alien_y = self.alien_agent.pos
+        else:
+            alien_x, alien_y = self.alien_agent.step((human_x, human_y), heard_pos, self.step_num)
+        
         self.alien_pos = (alien_y, alien_x)  # Convert back to (y, x)
         self.step_num += 1
 
