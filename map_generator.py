@@ -114,6 +114,86 @@ class MapGenerator:
         self.exit_pos: tuple | None = None
         self.metadata: dict = {}
 
+    # ── ER helper: regenerate with bias ────────────────────────────────────────
+    def regenerate_with_bias(
+        self,
+        alpha: float | None = None,
+        seed: int | None = None,
+        target_player_exit_dist: int | None = None,
+        target_alien_player_dist: int | None = None,
+        tries: int = 24,
+    ) -> tuple[np.ndarray, dict]:
+        """
+        Regenerate multiple candidate maps and keep the one closest to the
+        desired geometry (ER-style scenario sampling).
+
+        Args:
+            alpha: override alpha; if None, use self.alpha
+            seed: base seed; if None, use self.seed
+            target_player_exit_dist: desired player→exit path length
+            target_alien_player_dist: desired alien→player path length
+            tries: number of candidate maps to sample
+
+        Returns:
+            (best_grid, best_metadata)
+        """
+        alpha = self.alpha if alpha is None else float(np.clip(alpha, -1.0, 1.0))
+        target_player_exit_dist = (
+            self.target_player_exit_dist
+            if target_player_exit_dist is None
+            else target_player_exit_dist
+        )
+        target_alien_player_dist = (
+            self.target_alien_player_dist
+            if target_alien_player_dist is None
+            else target_alien_player_dist
+        )
+
+        best_gen: MapGenerator | None = None
+        best_score = float("inf")
+        base_seed = self.seed if seed is None else seed
+
+        for i in range(tries):
+            cand = MapGenerator(
+                width=self.width,
+                height=self.height,
+                alpha=alpha,
+                seed=base_seed + i,
+                min_room_size=self.min_room_size,
+                max_room_size=self.max_room_size,
+                max_rooms=self.max_rooms,
+                max_hides_per_room=self.max_hides_per_room,
+                target_player_exit_dist=target_player_exit_dist,
+                target_alien_player_dist=target_alien_player_dist,
+            )
+            cand.generate()
+            score = cand._bias_score(
+                target_player_exit_dist=target_player_exit_dist,
+                target_alien_player_dist=target_alien_player_dist,
+            )
+            if score < best_score:
+                best_score = score
+                best_gen = cand
+
+        assert best_gen is not None
+        # Copy best candidate into self (for consistency with rest of API)
+        self.__dict__.update(best_gen.__dict__)
+        return self.grid.copy(), self.metadata
+
+    def _bias_score(
+        self,
+        target_player_exit_dist: int | None,
+        target_alien_player_dist: int | None,
+    ) -> float:
+        """Score candidate map relative to ER geometry targets (lower is better)."""
+        m = self.metadata
+        score = 0.0
+        if target_player_exit_dist is not None and m.get("dist_player_exit") is not None:
+            score += abs(m["dist_player_exit"] - target_player_exit_dist)
+        if target_alien_player_dist is not None and m.get("dist_alien_player") is not None:
+            score += abs(m["dist_alien_player"] - target_alien_player_dist)
+        return score
+
     # ── Tile behaviour from alpha ───────────────────────────────────────────────
     @property
     def vent_probability(self) -> float:
@@ -235,7 +315,7 @@ class MapGenerator:
     def _overlaps(self, x, y, w, h) -> bool:
         pad = 1
         for rx, ry, rw, rh in self.rooms:
-            if x < rx + rw + pad and x + w + pad > rx and y < ry + rh + pad and y + h + pad > ry:
+            if x < rx + rw + pad and x + w + pad > rx and y < ry + rh + pad > ry:
                 return True
         return False
 
@@ -269,7 +349,7 @@ class MapGenerator:
             if 0 < x < self.width - 1 and 0 < y < self.height - 1:
                 if self.grid[y, x] == Tile.WALL:
                     self.grid[y, x] = Tile.FLOOR
-
+   
     # ── Special tile placement ──────────────────────────────────────────────────
     def _place_special_tiles(self):
         if len(self.rooms) < 3:
@@ -294,7 +374,6 @@ class MapGenerator:
         special_tiles = {(px, py), (ax, ay), (ex, ey)}
 
         # Vents
-
         for room in self.rooms:
             if self.rng.random() >= self.vent_probability:
                 continue
@@ -309,8 +388,6 @@ class MapGenerator:
         for room in self.rooms:
             x, y, w, h = room
             # Place hides on the wall ring surrounding the room.
-            # These cells remain reachable from the room, but they sit outside the
-            # main floor so they do not interfere with room traversal.
             wall_border_cells = []
             for wy in range(y - 1, y + h + 1):
                 for wx in range(x - 1, x + w + 1):
@@ -322,7 +399,11 @@ class MapGenerator:
                     touches_room_floor = False
                     for dy, dx in ((-1, 0), (0, 1), (1, 0), (0, -1)):
                         ny, nx = wy + dy, wx + dx
-                        if 0 <= nx < self.width and 0 <= ny < self.height and self.grid[ny, nx] == Tile.FLOOR:
+                        if (
+                            0 <= nx < self.width
+                            and 0 <= ny < self.height
+                            and self.grid[ny, nx] == Tile.FLOOR
+                        ):
                             touches_room_floor = True
                             break
 
@@ -339,14 +420,22 @@ class MapGenerator:
             if n_hide_room <= 0:
                 continue
 
-            for hy, hx in self.rng.sample(wall_border_cells, min(n_hide_room, len(wall_border_cells))):
-                # Don't overwrite special tiles (spawns, exit)
+            for hy, hx in self.rng.sample(
+                wall_border_cells, min(n_hide_room, len(wall_border_cells))
+            ):
                 if (hx, hy) not in special_tiles:
                     self.grid[hy, hx] = Tile.HIDE
 
     # ── Connectivity validation ─────────────────────────────────────────────────
     def _validate_connectivity(self):
-        passable = {Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT}
+        passable = {
+            Tile.FLOOR,
+            Tile.VENT,
+            Tile.HIDE,
+            Tile.PLAYER_START,
+            Tile.ALIEN_START,
+            Tile.EXIT,
+        }
         reachable = self._bfs_reachable(self.player_pos, passable)
 
         for target, name in [(self.exit_pos, "exit"), (self.alien_pos, "alien start")]:
@@ -363,12 +452,38 @@ class MapGenerator:
             cx, cy = queue.popleft()
             for dx, dy in dirs:
                 nx, ny = cx + dx, cy + dy
-                if (nx, ny) not in visited and 0 <= nx < self.width and 0 <= ny < self.height:
+                if (
+                    (nx, ny) not in visited
+                    and 0 <= nx < self.width
+                    and 0 <= ny < self.height
+                ):
                     if self.grid[ny, nx] in passable:
                         visited.add((nx, ny))
                         queue.append((nx, ny))
         return visited
 
+    def _bfs_distance(self, start, goal, passable) -> int | None:
+        if start is None or goal is None:
+            return None
+        visited = {start}
+        queue = deque([(start, 0)])
+        dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        while queue:
+            (cx, cy), d = queue.popleft()
+            if (cx, cy) == goal:
+                return d
+            for dx, dy in dirs:
+                nx, ny = cx + dx, cy + dy
+                if (
+                    (nx, ny) not in visited
+                    and 0 <= nx < self.width
+                    and 0 <= ny < self.height
+                ):
+                    if self.grid[ny, nx] in passable:
+                        visited.add((nx, ny))
+                        queue.append(((nx, ny), d + 1))
+        return None
+    
     def _bfs_distance(self, start, goal, passable) -> int | None:
         if start is None or goal is None:
             return None
@@ -393,7 +508,14 @@ class MapGenerator:
         uniq, cnts = np.unique(self.grid, return_counts=True)
         counts = {int(k): int(v) for k, v in zip(uniq, cnts)}
 
-        passable = {Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT}
+        passable = {
+            Tile.FLOOR,
+            Tile.VENT,
+            Tile.HIDE,
+            Tile.PLAYER_START,
+            Tile.ALIEN_START,
+            Tile.EXIT,
+        }
         d_pe = self._bfs_distance(self.player_pos, self.exit_pos, passable)
         d_ae = self._bfs_distance(self.alien_pos, self.exit_pos, passable)
         d_ap = self._bfs_distance(self.alien_pos, self.player_pos, passable)
@@ -407,11 +529,15 @@ class MapGenerator:
             "height": self.height,
             "n_rooms": len(self.rooms),
             "hide_max_per_room": self.max_hides_per_room,
-            "hide_distribution": [round(p, 4) for p in self.hide_count_distribution(self.max_hides_per_room)],
+            "hide_distribution": [
+                round(p, 4) for p in self.hide_count_distribution(self.max_hides_per_room)
+            ],
             "hide_room_max_mode": "scaled_by_room_area",
             "tile_counts": {TILE_NAME[k]: v for k, v in counts.items() if k in TILE_NAME},
             "open_ratio": round(open_tiles / total, 4),
-            "vent_ratio": round(counts.get(Tile.VENT, 0) / len(self.rooms), 4),
+            "vent_ratio": round(counts.get(Tile.VENT, 0) / len(self.rooms), 4)
+            if self.rooms
+            else 0.0,
             "hide_number": counts.get(Tile.HIDE, 0),
             "player_start": list(self.player_pos),
             "alien_start": list(self.alien_pos),
@@ -419,8 +545,12 @@ class MapGenerator:
             "dist_player_exit": d_pe,
             "dist_alien_exit": d_ae,
             "dist_alien_player": d_ap,
-            "computed_alpha": round((counts.get(Tile.VENT, 0) - counts.get(Tile.HIDE, 0)) / max(total, 1), 4),
+            "computed_alpha": round(
+                (counts.get(Tile.VENT, 0) - counts.get(Tile.HIDE, 0)) / max(total, 1),
+                4,
+            ),
         }
+
 
 
 # ── MapPool ────────────────────────────────────────────────────────────────────

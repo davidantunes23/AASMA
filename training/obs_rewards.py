@@ -64,8 +64,11 @@ def get_alien_obs(game, alien_agent) -> np.ndarray:
     exit_pos = find_exit(game.map)
     exit_delta = [(exit_pos[0] - ax) / W, (exit_pos[1] - ay) / H]
 
-    return np.array(pos + state_oh + heard + list(belief_flat)
-                    + [known_ratio] + exit_delta, dtype=np.float32)
+    return np.array(
+        pos + state_oh + heard + list(belief_flat)
+        + [known_ratio] + exit_delta,
+        dtype=np.float32
+    )
 
 
 def get_player_obs(game, human_agent) -> np.ndarray:
@@ -91,38 +94,58 @@ def get_player_obs(game, human_agent) -> np.ndarray:
         exit_known = [0.0]
 
     n_hiding = len(human_agent._get_known_hiding_spots()) / 10.0
-    known_ratio = float((human_agent._known_map != HumanAgent.UNKNOWN).mean()) if human_agent._known_map is not None else 0.0
+    known_ratio = float(
+        (human_agent._known_map != HumanAgent.UNKNOWN).mean()
+    ) if human_agent._known_map is not None else 0.0
 
     made_noise = [1.0 if game.last_noise_ripple is not None else 0.0]
 
-    return np.array(pos + hidden + radar_oh + [steps_since_radar_norm]
-                    + exit_delta + exit_known + [n_hiding, known_ratio]
-                    + made_noise, dtype=np.float32)
+    return np.array(
+        pos + hidden + radar_oh + [steps_since_radar_norm]
+        + exit_delta + exit_known + [n_hiding, known_ratio]
+        + made_noise,
+        dtype=np.float32
+    )
 
 
-def compute_alien_reward(game, prev_dist, curr_dist, outcome, step, max_steps, g_coef, 
-                         prev_alien_pos=None, is_new_cell=False, reward_log=None):
+def compute_alien_reward(
+    game,
+    prev_dist,
+    curr_dist,
+    outcome,
+    step,
+    max_steps,
+    g_coef,
+    prev_alien_pos=None,
+    is_new_cell=False,
+    reward_log=None,
+):
     """Asymmetric alien reward: focused on catching human (primary win condition).
-    
+
     Returns: (reward, reward_log_dict)
     reward_log tracks component breakdown: terminal, step_cost, pursuit, exploration
     """
     if reward_log is None:
-        reward_log = {"terminal": 0.0, "step_cost": 0.0, "pursuit": 0.0, "exploration": 0.0}
-    
+        reward_log = {
+            "terminal": 0.0,
+            "step_cost": 0.0,
+            "pursuit": 0.0,
+            "exploration": 0.0,
+        }
+
     r = 0.0
-    
+
     # Per-step time cost (tiny, just prevents infinite wandering)
     step_cost = -0.01
     r += step_cost
     reward_log["step_cost"] += step_cost
-    
+
     # Exploration bonus only in first half of episode (early discovery helps, not repeated farming)
     if is_new_cell and step < max_steps * 0.5:
         exploration = 0.02
         r += exploration
         reward_log["exploration"] += exploration
-    
+
     # Pursuit reward: only when recently heard human (semantically meaningful pursuit)
     # Strong shaping here because it directly correlates with catching
     if game.last_noise_ripple is not None and game.alien_agent.steps_since_heard <= 10:
@@ -130,7 +153,7 @@ def compute_alien_reward(game, prev_dist, curr_dist, outcome, step, max_steps, g
         pursuit = 0.3 * dist_delta  # Reward approaching heard human
         r += pursuit
         reward_log["pursuit"] += pursuit
-    
+
     # Terminal rewards absolutely dominate (no farming possible)
     if outcome == "alien_caught_human":
         terminal = 20.0
@@ -145,67 +168,116 @@ def compute_alien_reward(game, prev_dist, curr_dist, outcome, step, max_steps, g
         terminal = -0.5
         r += terminal
         reward_log["terminal"] += terminal
-    
+
     return r, reward_log
 
 
-def compute_player_reward(game, human_agent, prev_exit_dist, curr_exit_dist,
-                           outcome, step, max_steps, g_coef, first_hide_this_episode, 
-                           is_new_cell=False, reward_log=None, prev_known_ratio=0.0, curr_known_ratio=0.0):
+def compute_player_reward(
+    game,
+    human_agent,
+    prev_exit_dist,
+    curr_exit_dist,
+    outcome,
+    step,
+    max_steps,
+    g_coef,
+    first_hide_this_episode,
+    is_new_cell=False,
+    reward_log=None,
+    prev_known_ratio=0.0,
+    curr_known_ratio=0.0,
+):
     """Asymmetric human reward: focused on escaping to exit (primary win condition).
-    
+
     Returns: (reward, first_hide_this_episode, reward_log_dict)
-    reward_log tracks component breakdown: terminal, step_cost, exit_progress, hide_bonus, exploration
     """
     if reward_log is None:
-        reward_log = {"terminal": 0.0, "step_cost": 0.0, "exit_progress": 0.0, 
-                      "hide_bonus": 0.0, "danger_penalty": 0.0, "discovery": 0.0, "exploration": 0.0}
-    
+        reward_log = {
+            "terminal": 0.0,
+            "step_cost": 0.0,
+            "exit_progress": 0.0,
+            "exit_proximity": 0.0,
+            "hide_bonus": 0.0,
+            "danger_penalty": 0.0,
+            "discovery": 0.0,
+            "exploration": 0.0,
+            "no_progress_penalty": 0.0,
+            "found_exit_bonus": 0.0,
+        }
+
     r = 0.0
-    
+
     # Per-step time cost (tiny, just prevents infinite wandering)
     step_cost = -0.01
     r += step_cost
     reward_log["step_cost"] += step_cost
-    
+
     # Danger penalty: when critically threatened while unhidden (encourages hiding or moving)
     if game.last_radar_threat == "CRITICAL" and not human_agent.hidden:
         danger = -0.2
         r += danger
         reward_log["danger_penalty"] += danger
-    
-    # Discovery bonus: if exit not yet found, reward expanding known map
-    # This gives early-episode signal to explore and find exit (before exit_progress shaping activates)
+
+    # Before exit is known: reward discovery of new map areas
     if human_agent._known_exit is None and curr_known_ratio > prev_known_ratio:
         discovery = 0.15 * (curr_known_ratio - prev_known_ratio)
         r += discovery
-        reward_log["discovery"] = reward_log.get("discovery", 0.0) + discovery
-    
-    # Tiny exploration bonus (helps early map discovery, not repeated farming)
-    if is_new_cell and step < max_steps * 0.5:
-        # Increased from 0.01 -> 0.05 to encourage human map discovery
-        exploration = 0.05
+        reward_log["discovery"] += discovery
+
+    # Exploration bonus ONLY before exit is known, and only in first half
+    if (
+        human_agent._known_exit is None
+        and is_new_cell
+        and step < max_steps * 0.5
+    ):
+        exploration = 0.03  # slightly smaller, pure exploration is secondary
         r += exploration
         reward_log["exploration"] += exploration
-    
-    # Exit progress shaping: only when exit is known and discovered (semantically meaningful)
-    if human_agent._known_exit is not None and prev_exit_dist is not None and curr_exit_dist is not None:
+
+    # One-time exit discovery bonus: first time exit becomes known
+    if (
+        human_agent._known_exit is not None
+        and prev_exit_dist is None
+        and curr_exit_dist is not None
+    ):
+        found_exit_bonus = 3.0
+        r += found_exit_bonus
+        reward_log["found_exit_bonus"] += found_exit_bonus
+
+    # Exit progress & proximity shaping, only when exit is known
+    if (
+        human_agent._known_exit is not None
+        and prev_exit_dist is not None
+        and curr_exit_dist is not None
+    ):
         exit_delta = prev_exit_dist - curr_exit_dist
-        # Increase exit progress shaping from 0.05 -> 0.10 to strengthen escape signal
-        exit_progress = 0.10 * exit_delta
-        r += exit_progress
-        reward_log["exit_progress"] += exit_progress
-    
+
+        # Stronger incentive for moving closer
+        progress_term = 0.25 * exit_delta
+
+        # Proximity term: being near the exit is good even with small sideways moves
+        # 30.0 is a rough max path length; tune for your maps
+        proximity_term = 0.02 * max(0.0, 30.0 - curr_exit_dist)
+
+        r += progress_term + proximity_term
+        reward_log["exit_progress"] += progress_term
+        reward_log["exit_proximity"] += proximity_term
+
+        # Small penalty when making effectively no net progress (discourage oscillations)
+        if abs(exit_delta) < 0.5:
+            no_progress_penalty = -0.02
+            r += no_progress_penalty
+            reward_log["no_progress_penalty"] += no_progress_penalty
+
     # ONE-TIME hide bonus: only first time hiding per episode (not farmable)
     if human_agent.hidden and first_hide_this_episode:
         hide_bonus = 0.5
         r += hide_bonus
         reward_log["hide_bonus"] += hide_bonus
         first_hide_this_episode = False
-    
+
     # Terminal rewards absolutely dominate (no farming possible)
     if outcome == "human_reached_exit":
-        # Increased from 20 -> 30 to strongly prefer escaping
         terminal = 30.0
         r += terminal
         reward_log["terminal"] += terminal
@@ -214,12 +286,11 @@ def compute_player_reward(game, human_agent, prev_exit_dist, curr_exit_dist,
         r += terminal
         reward_log["terminal"] += terminal
     elif outcome == "max_steps_reached":
-        # Add small negative for timeout: surviving is not success
-        # This tilts optimization toward "achieve escape" vs "just survive"
+        # Surviving without escaping is slightly bad
         terminal = -1.0
         r += terminal
         reward_log["terminal"] += terminal
-    
+
     return r, first_hide_this_episode, reward_log
 
 
