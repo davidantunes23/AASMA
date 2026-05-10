@@ -55,10 +55,10 @@ def load_or_init_model(model_path: str, env, verbose: int = 0):
         "MlpPolicy",
         env=env,
         verbose=verbose,
-        gamma=0.9995,
+        gamma=0.99,
         learning_rate=5e-5,
         ent_coef=0.01,
-        n_steps=256,
+        n_steps=400,
         batch_size=64,
     )
 
@@ -147,10 +147,10 @@ def main():
             "MlpPolicy",
             env=init_alien_env,
             verbose=0,
-            gamma=0.9995,
+            gamma=0.99,
             learning_rate=5e-5,
             ent_coef=0.01,
-            n_steps=256,
+            n_steps=400,
             batch_size=64,
         )
         init_alien.save(alien_checkpoint)
@@ -161,10 +161,10 @@ def main():
             "MlpPolicy",
             env=init_player_env,
             verbose=0,
-            gamma=0.9995,
+            gamma=0.99,
             learning_rate=5e-5,
             ent_coef=0.01,
-            n_steps=256,
+            n_steps=400,
             batch_size=64,
         )
         init_player.save(player_checkpoint)

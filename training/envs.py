@@ -53,6 +53,13 @@ class BaseAETEnv(gym.Env):
         self._prev_dist = None
         self._prev_exit_dist = None
         self._prev_alien_pos = None
+        self._prev_known_ratio = 0.0  # Track map knowledge for discovery bonus
+        self._visited_cells = set()  # Track visited cells for exploration bonus
+        self._idle_steps = 0  # Track consecutive steps with no position change
+        
+        # Reward logging: track components per episode for debugging
+        self._reward_log = None  # Initialized per episode
+        self._episode_total_reward = 0.0
 
     def _predict_model_action(self, model, obs: np.ndarray) -> int:
         if hasattr(model, "observation_space") and getattr(model.observation_space, "shape", None):
@@ -70,20 +77,13 @@ class BaseAETEnv(gym.Env):
         return int(action)
 
     def _filter_action(self, action: int) -> int:
-        """Map WAIT (0) to a random walk unless it's a valid hide WAIT for the human.
-
-        - If action != 0, return unchanged.
-        - If role is human and currently hidden, allow WAIT (0).
-        - Otherwise return a random walk from _WALK_ACTIONS.
-        The alien never receives WAIT: WAIT will always be remapped to a walk.
+        """Return action as-is. PPO learns better with stable action mappings.
+        
+        WAIT (0) is a valid action for both agents:
+        - Human can WAIT when hidden
+        - Alien can WAIT (though rewards should discourage prolonged idling)
         """
-        if int(action) != 0:
-            return int(action)
-        # WAIT action requested
-        if self.role == "human" and getattr(self.human_agent, "hidden", False):
-            return 0
-        # Map WAIT to a random walk
-        return int(self._rng.choice(_WALK_ACTIONS))
+        return int(action)
 
     def _action_to_human_tuple(self, action: int):
         from agents.human import Action as HumanAction
@@ -172,6 +172,23 @@ class BaseAETEnv(gym.Env):
         self._prev_dist = None
         self._prev_exit_dist = None
         self._prev_alien_pos = self.alien_agent.pos
+        self._prev_known_ratio = 0.0  # Reset map knowledge tracking
+        self._visited_cells = set()  # Reset visited cells for new episode
+        self._idle_steps = 0  # Reset idle step counter
+        
+        # Initialize reward log for this episode
+        if self.role == "alien":
+            self._reward_log = {"terminal": 0.0, "step_cost": 0.0, "pursuit": 0.0, "exploration": 0.0}
+        else:
+            self._reward_log = {"terminal": 0.0, "step_cost": 0.0, "exit_progress": 0.0, 
+                                "hide_bonus": 0.0, "danger_penalty": 0.0, "discovery": 0.0, "exploration": 0.0}
+        self._episode_total_reward = 0.0
+        
+        # Record starting position as visited
+        if self.role == "alien":
+            self._visited_cells.add(self.alien_agent.pos)
+        else:
+            self._visited_cells.add(self.human_agent.position)
 
         obs = self._get_obs()
         return obs, {}
@@ -215,6 +232,7 @@ class BaseAETEnv(gym.Env):
 
         # Step the game (uses the patched agent behavior)
         prev_alien_pos = self.alien_agent.pos
+        prev_human_pos = self.human_agent.position if self.role == "human" else None
         self.game._step()
 
         # restore monkey-patches
@@ -229,34 +247,71 @@ class BaseAETEnv(gym.Env):
         outcome = self._check_outcome()
         g_coef = max(0.0, 1.0 - ((self.global_step_offset + self.step_count) / self.decay_steps))
 
+        # Track exploration: check if current position is new
+        is_new_cell = False
+        if self.role == "alien":
+            curr_pos = self.alien_agent.pos
+            if curr_pos not in self._visited_cells:
+                is_new_cell = True
+                self._visited_cells.add(curr_pos)
+            # Track consecutive idle steps
+            if curr_pos == prev_alien_pos:
+                self._idle_steps += 1
+            else:
+                self._idle_steps = 0
+        else:
+            curr_pos = self.human_agent.position
+            if curr_pos not in self._visited_cells:
+                is_new_cell = True
+                self._visited_cells.add(curr_pos)
+            # Track consecutive idle steps
+            if prev_human_pos is not None and curr_pos == prev_human_pos:
+                self._idle_steps += 1
+            else:
+                self._idle_steps = 0
+
         if self.role == "alien":
             curr_dist = self._curr_dist()
             prev_dist = self._prev_dist if self._prev_dist is not None else curr_dist
-            reward = self._compute_alien_reward(prev_dist, curr_dist, outcome, g_coef, prev_alien_pos)
+            reward, self._reward_log = self._compute_alien_reward(prev_dist, curr_dist, outcome, g_coef, prev_alien_pos, is_new_cell=is_new_cell)
             self._prev_dist = curr_dist
             self._prev_alien_pos = self.alien_agent.pos
         else:
             curr_exit_dist = self._curr_exit_dist()
             prev_exit_dist = self._prev_exit_dist if self._prev_exit_dist is not None else curr_exit_dist
-            reward, self.first_hide = self._compute_player_reward(
+            # Compute current map knowledge for discovery bonus
+            curr_known_ratio = float((self.human_agent._known_map != HumanAgent.UNKNOWN).mean()) if self.human_agent._known_map is not None else 0.0
+            reward, self.first_hide, self._reward_log = self._compute_player_reward(
                 prev_exit_dist,
                 curr_exit_dist,
                 outcome,
                 g_coef,
                 self.first_hide,
+                is_new_cell=is_new_cell,
+                prev_known_ratio=self._prev_known_ratio,
+                curr_known_ratio=curr_known_ratio,
             )
             self._prev_exit_dist = curr_exit_dist
+            self._prev_known_ratio = curr_known_ratio
+        
+        # Accumulate episode reward for logging
+        self._episode_total_reward += reward
 
         terminated = outcome in {"alien_caught_human", "human_reached_exit"}
         truncated = outcome == "max_steps_reached"
         obs = self._get_obs()
-        info = {"outcome": outcome, "step_count": self.step_count, "role": self.role}
+        info = {"outcome": outcome, "step_count": self.step_count, "role": self.role, "reward": reward}
+        
+        # Log episode summary when terminal
+        if terminated or truncated:
+            self._log_episode_summary(outcome)
+        
         return obs, reward, terminated, truncated, info
 
-    def _compute_alien_reward(self, prev_dist, curr_dist, outcome, g_coef, prev_alien_pos=None):
+    def _compute_alien_reward(self, prev_dist, curr_dist, outcome, g_coef, prev_alien_pos=None, is_new_cell=False):
         from training.obs_rewards import compute_alien_reward
 
-        return compute_alien_reward(
+        reward, reward_log = compute_alien_reward(
             self.game,
             prev_dist,
             curr_dist,
@@ -265,12 +320,15 @@ class BaseAETEnv(gym.Env):
             self.max_steps,
             g_coef,
             prev_alien_pos=prev_alien_pos,
+            is_new_cell=is_new_cell,
+            reward_log=self._reward_log,
         )
+        return reward, reward_log
 
-    def _compute_player_reward(self, prev_exit_dist, curr_exit_dist, outcome, g_coef, first_hide_this_episode):
+    def _compute_player_reward(self, prev_exit_dist, curr_exit_dist, outcome, g_coef, first_hide_this_episode, is_new_cell=False, prev_known_ratio=0.0, curr_known_ratio=0.0):
         from training.obs_rewards import compute_player_reward
 
-        return compute_player_reward(
+        reward, first_hide, reward_log = compute_player_reward(
             self.game,
             self.human_agent,
             prev_exit_dist,
@@ -280,7 +338,24 @@ class BaseAETEnv(gym.Env):
             self.max_steps,
             g_coef,
             first_hide_this_episode,
+            is_new_cell=is_new_cell,
+            reward_log=self._reward_log,
+            prev_known_ratio=prev_known_ratio,
+            curr_known_ratio=curr_known_ratio,
         )
+        return reward, first_hide, reward_log
+    
+    def _log_episode_summary(self, outcome):
+        """Log reward component breakdown for this episode."""
+        import json
+        summary = {
+            "role": self.role,
+            "steps": self.step_count,
+            "outcome": outcome,
+            "total_reward": self._episode_total_reward,
+            "reward_components": self._reward_log,
+        }
+        print(f"[EPISODE] {json.dumps(summary)}")
 
     def _get_obs(self):
         from training.obs_rewards import get_alien_obs, get_player_obs

@@ -32,8 +32,8 @@ def main(args):
     # Alien warm-up vs rule-based human
     alien_env = DummyVecEnv([lambda: AlienEnv(fixed_map, max_steps=500)])
     alien_model = PPO("MlpPolicy", env=alien_env, verbose=1,
-                      gamma=0.9995, learning_rate=5e-5,
-                      ent_coef=0.01, n_steps=256, batch_size=64)
+                      gamma=0.99, learning_rate=5e-5,
+                      ent_coef=0.01, n_steps=400, batch_size=64)
     print("Training alien (warm-up) for", args.alien_steps)
     alien_model.learn(total_timesteps=args.alien_steps)
     alien_model.save("models/alien_warmup.zip")
@@ -41,8 +41,8 @@ def main(args):
     # Player warm-up vs rule-based alien
     player_env = DummyVecEnv([lambda: PlayerEnv(fixed_map, max_steps=500)])
     player_model = PPO("MlpPolicy", env=player_env, verbose=1,
-                       gamma=0.9995, learning_rate=5e-5,
-                       ent_coef=0.01, n_steps=256, batch_size=64)
+                       gamma=0.99, learning_rate=5e-5,
+                       ent_coef=0.01, n_steps=400, batch_size=64)
     print("Training player (warm-up) for", args.player_steps)
     player_model.learn(total_timesteps=args.player_steps)
     player_model.save("models/player_warmup.zip")

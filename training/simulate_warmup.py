@@ -47,8 +47,8 @@ def resolve_checkpoint_path(path_value: str) -> str:
         path,
         Path.cwd() / path,
         ROOT / path,
-        ROOT / "models" / path.name,
-        ROOT / "models" / path_value,
+        ROOT / "models_hard" / path.name,
+        ROOT / "models_hard" / path_value,
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -141,8 +141,8 @@ def run_warmup_episode(alien_model: PPO, player_model: PPO, grid: np.ndarray, ma
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simulate any PPO checkpoint pair on the fixed map")
-    parser.add_argument("--alien-model", type=str, default="models/alien_warmup.zip")
-    parser.add_argument("--player-model", type=str, default="models/player_warmup.zip")
+    parser.add_argument("--alien-model", type=str, default="models_hard/alien_warmup.zip")
+    parser.add_argument("--player-model", type=str, default="models_hard/player_warmup.zip")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-steps", type=int, default=220)
     parser.add_argument("--view-length", type=int, default=6)
