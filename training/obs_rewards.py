@@ -131,6 +131,7 @@ def compute_alien_reward(
             "step_cost": 0.0,
             "pursuit": 0.0,
             "exploration": 0.0,
+            "idle_penalty": 0.0,
         }
 
     r = 0.0
@@ -139,6 +140,11 @@ def compute_alien_reward(
     step_cost = -0.01
     r += step_cost
     reward_log["step_cost"] += step_cost
+
+    if prev_alien_pos is not None and game.alien_agent.pos == prev_alien_pos:
+        idle_penalty = -0.02
+        r += idle_penalty
+        reward_log["idle_penalty"] += idle_penalty
 
     # Exploration bonus only in first half of episode (early discovery helps, not repeated farming)
     if is_new_cell and step < max_steps * 0.5:
@@ -182,6 +188,7 @@ def compute_player_reward(
     max_steps,
     g_coef,
     first_hide_this_episode,
+    prev_human_pos=None,
     is_new_cell=False,
     reward_log=None,
     prev_known_ratio=0.0,
@@ -203,6 +210,7 @@ def compute_player_reward(
             "exploration": 0.0,
             "no_progress_penalty": 0.0,
             "found_exit_bonus": 0.0,
+            "idle_penalty": 0.0,
         }
 
     r = 0.0
@@ -211,6 +219,16 @@ def compute_player_reward(
     step_cost = -0.01
     r += step_cost
     reward_log["step_cost"] += step_cost
+
+    if prev_human_pos is not None and human_agent.position == prev_human_pos:
+        from map_generator import Tile
+
+        py, px = human_agent.position
+        is_hiding_spot = game.map[py, px] == int(Tile.HIDE)
+        if not is_hiding_spot:
+            idle_penalty = -0.02
+            r += idle_penalty
+            reward_log["idle_penalty"] += idle_penalty
 
     # Danger penalty: when critically threatened while unhidden (encourages hiding or moving)
     if game.last_radar_threat == "CRITICAL" and not human_agent.hidden:

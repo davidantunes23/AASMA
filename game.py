@@ -148,7 +148,7 @@ class Game:
             ox, oy = self.alien_agent.pos
             nx, ny = ox + dx, oy + dy
             if (0 <= ny < self.map.shape[0] and 0 <= nx < self.map.shape[1]
-                    and self.map[ny, nx] != Tile.WALL):
+                    and self.map[ny, nx] != Tile.WALL and self.map[ny, nx] != Tile.HIDE):
                 self.alien_agent.pos = (nx, ny)
             alien_x, alien_y = self.alien_agent.pos
         else:

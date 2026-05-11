@@ -178,10 +178,27 @@ class BaseAETEnv(gym.Env):
         
         # Initialize reward log for this episode
         if self.role == "alien":
-            self._reward_log = {"terminal": 0.0, "step_cost": 0.0, "pursuit": 0.0, "exploration": 0.0}
+            self._reward_log = {
+                "terminal": 0.0,
+                "step_cost": 0.0,
+                "pursuit": 0.0,
+                "exploration": 0.0,
+                "idle_penalty": 0.0,
+            }
         else:
-            self._reward_log = {"terminal": 0.0, "step_cost": 0.0, "exit_progress": 0.0, 
-                                "hide_bonus": 0.0, "danger_penalty": 0.0, "discovery": 0.0, "exploration": 0.0}
+            self._reward_log = {
+                "terminal": 0.0,
+                "step_cost": 0.0,
+                "exit_progress": 0.0,
+                "exit_proximity": 0.0,
+                "hide_bonus": 0.0,
+                "danger_penalty": 0.0,
+                "discovery": 0.0,
+                "exploration": 0.0,
+                "no_progress_penalty": 0.0,
+                "found_exit_bonus": 0.0,
+                "idle_penalty": 0.0,
+            }
         self._episode_total_reward = 0.0
         
         # Record starting position as visited
@@ -287,6 +304,7 @@ class BaseAETEnv(gym.Env):
                 outcome,
                 g_coef,
                 self.first_hide,
+                prev_human_pos=prev_human_pos,
                 is_new_cell=is_new_cell,
                 prev_known_ratio=self._prev_known_ratio,
                 curr_known_ratio=curr_known_ratio,
@@ -325,7 +343,7 @@ class BaseAETEnv(gym.Env):
         )
         return reward, reward_log
 
-    def _compute_player_reward(self, prev_exit_dist, curr_exit_dist, outcome, g_coef, first_hide_this_episode, is_new_cell=False, prev_known_ratio=0.0, curr_known_ratio=0.0):
+    def _compute_player_reward(self, prev_exit_dist, curr_exit_dist, outcome, g_coef, first_hide_this_episode, prev_human_pos=None, is_new_cell=False, prev_known_ratio=0.0, curr_known_ratio=0.0):
         from training.obs_rewards import compute_player_reward
 
         reward, first_hide, reward_log = compute_player_reward(
@@ -338,6 +356,7 @@ class BaseAETEnv(gym.Env):
             self.max_steps,
             g_coef,
             first_hide_this_episode,
+            prev_human_pos=prev_human_pos,
             is_new_cell=is_new_cell,
             reward_log=self._reward_log,
             prev_known_ratio=prev_known_ratio,
