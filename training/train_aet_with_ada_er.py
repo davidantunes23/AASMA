@@ -11,33 +11,29 @@ Implements:
 5. pFSP-inspired opponent prioritization based on per-checkpoint win rates
 """
 
+import json
 import os
 import sys
-from pathlib import Path
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Tuple
-import json
-import random
-import numpy as np
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv
+from typing import Dict, Optional, Tuple
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-from map_generator import MapGenerator, Tile
-from training.envs import AlienEnv, PlayerEnv
-from training.train_staged import HistoricalOpponentPool
+import numpy as np
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
 
+from map_generator import MapGenerator
 from training.environment_randomization import (
     EnvironmentRandomizerAdvanced,
-    BalanceMode,
     ERScenario,
     create_balanced_er_config,
 )
-
+from training.envs import AlienEnv, PlayerEnv
+from training.train_staged import HistoricalOpponentPool
 
 # ────────────────────────── Pipelines & tracking ───────────────────────────────
 
@@ -52,7 +48,7 @@ class RolePipeline:
     gamma: float = 0.99
     ent_coef: float = 0.01
     n_steps: int = 400
-    batch_size: int = 64
+    batch_size: int = 80
 
     # Training state
     total_steps: int = 0
@@ -267,7 +263,7 @@ def train_aet_round(
     current_mode = randomizer.update_imbalance(alien_wr, human_wr)
 
     # High-level ER config for logging / optional use
-    er_cfg = create_balanced_er_config(randomizer, alien_wr, human_wr, apply_now=False)
+    create_balanced_er_config(randomizer, alien_wr, human_wr, apply_now=False)
 
     if randomizer.should_apply_er():
         print(
@@ -330,7 +326,7 @@ def train_aet_round(
     # Training sampling: keep simple latest+history; pFSP is mainly used in eval
     sampled_alien_path = alien_pipeline.opponent_pool.sample_opponent()
     if sampled_alien_path and os.path.exists(sampled_alien_path):
-        opponent_model = PPO.load(sampled_alien_path)
+        opponent_model = PPO.load(sampled_alien_path, device="cpu")
     else:
         opponent_model = None
 
@@ -352,7 +348,7 @@ def train_aet_round(
     print(f"\n[Alien] Training for {alien_steps} steps...")
     sampled_human_path = human_pipeline.opponent_pool.sample_opponent()
     if sampled_human_path and os.path.exists(sampled_human_path):
-        opponent_model = PPO.load(sampled_human_path)
+        opponent_model = PPO.load(sampled_human_path, device="cpu")
     else:
         opponent_model = None
 
@@ -384,7 +380,7 @@ def train_aet_round(
                 alien_pipeline.opponent_pool, pfsp_rng
             )
             if sampled_alien_path and os.path.exists(sampled_alien_path):
-                sampled_alien = PPO.load(sampled_alien_path)
+                sampled_alien = PPO.load(sampled_alien_path, device="cpu")
 
             # Sample human opponent using pFSP from human pool
             sampled_human = None
@@ -392,7 +388,7 @@ def train_aet_round(
                 human_pipeline.opponent_pool, pfsp_rng
             )
             if sampled_human_path and os.path.exists(sampled_human_path):
-                sampled_human = PPO.load(sampled_human_path)
+                sampled_human = PPO.load(sampled_human_path, device="cpu")
 
             # Run episodes (on original fixed map, not randomized)
             human_result = run_episode_collect_stats(
@@ -501,10 +497,12 @@ def main(args):
     human_model = PPO.load(
         os.path.join(args.output_dir, "player_stage3_final.zip"),
         env=DummyVecEnv([lambda: PlayerEnv(fixed_map, max_steps=args.max_steps)]),
+        device="cpu",
     )
     alien_model = PPO.load(
         os.path.join(args.output_dir, "alien_stage3_final.zip"),
         env=DummyVecEnv([lambda: AlienEnv(fixed_map, max_steps=args.max_steps)]),
+        device="cpu",
     )
 
     # Create pipelines

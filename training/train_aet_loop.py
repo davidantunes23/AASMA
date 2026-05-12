@@ -14,17 +14,16 @@ import random
 import sys
 from pathlib import Path
 
-import numpy as np
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import numpy as np
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
+
 from map_generator import MapGenerator
 from training.envs import AlienEnv, PlayerEnv
-
 
 ALIEN_WINS = {"alien_caught_human"}
 PLAYER_WINS = {"human_reached_exit"}
@@ -59,7 +58,7 @@ def load_or_init_model(model_path: str, env, verbose: int = 0):
         learning_rate=5e-5,
         ent_coef=0.01,
         n_steps=400,
-        batch_size=64,
+        batch_size=80,
     )
 
 
@@ -151,7 +150,7 @@ def main():
             learning_rate=5e-5,
             ent_coef=0.01,
             n_steps=400,
-            batch_size=64,
+            batch_size=80,
         )
         init_alien.save(alien_checkpoint)
 
@@ -165,7 +164,7 @@ def main():
             learning_rate=5e-5,
             ent_coef=0.01,
             n_steps=400,
-            batch_size=64,
+            batch_size=80,
         )
         init_player.save(player_checkpoint)
 

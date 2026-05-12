@@ -1,11 +1,10 @@
-import numpy as np
 import gymnasium as gym
+import numpy as np
 from gymnasium import spaces
 
-from agents.human import HumanAgent, Direction
-from agents.alien import AlienAgent, PASSABLE_ALIEN
+from agents.alien import AlienAgent
+from agents.human import Direction, HumanAgent
 from game import Game
-
 
 ACTION_MEANING = {
     0: ("WAIT", None),
@@ -28,7 +27,7 @@ class BaseAETEnv(gym.Env):
 
     metadata = {"render.modes": ["human"]}
 
-    def __init__(self, fixed_map: np.ndarray, max_steps: int = 500, role: str = "alien", opponent_model=None, global_step_offset: int = 0, decay_steps: int = 300_000):
+    def __init__(self, fixed_map: np.ndarray, max_steps: int = 500, role: str = "alien", opponent_model=None, global_step_offset: int = 0, decay_steps: int = 300_000, alien_freeze_steps: int = 0):
         super().__init__()
         assert role in {"alien", "human"}
         self.role = role
@@ -37,6 +36,7 @@ class BaseAETEnv(gym.Env):
         self.opponent_model = opponent_model
         self.global_step_offset = global_step_offset
         self.decay_steps = decay_steps
+        self.alien_freeze_steps = alien_freeze_steps
         self.step_count = 0
         self._rng = np.random.default_rng()
 
@@ -60,6 +60,12 @@ class BaseAETEnv(gym.Env):
         # Reward logging: track components per episode for debugging
         self._reward_log = None  # Initialized per episode
         self._episode_total_reward = 0.0
+
+        # Action / exploration debug tracking (human only)
+        self._action_counts = [0, 0, 0, 0, 0]  # WAIT, N, E, S, W
+        self._first_actions: list = []
+        self._last_known_map_mean = 0.0
+        self._total_stuck_steps = 0  # steps where position didn't change (regardless of action)
 
     def _predict_model_action(self, model, obs: np.ndarray) -> int:
         if hasattr(model, "observation_space") and getattr(model.observation_space, "shape", None):
@@ -135,10 +141,9 @@ class BaseAETEnv(gym.Env):
         return float(abs(hx - ax) + abs(hy - ay))
 
     def _curr_exit_dist(self) -> float | None:
-        exit_pos = self._exit_pos()
-        if self.game is None or exit_pos is None:
+        if self.human_agent is None or self.human_agent._known_exit is None:
             return None
-        ey, ex = exit_pos
+        ey, ex = self.human_agent._known_exit
         hy, hx = self.game.human_pos
         return float(abs(hx - ex) + abs(hy - ey))
 
@@ -200,7 +205,11 @@ class BaseAETEnv(gym.Env):
                 "idle_penalty": 0.0,
             }
         self._episode_total_reward = 0.0
-        
+        self._action_counts = [0, 0, 0, 0, 0]
+        self._first_actions = []
+        self._last_known_map_mean = 0.0
+        self._total_stuck_steps = 0
+
         # Record starting position as visited
         if self.role == "alien":
             self._visited_cells.add(self.alien_agent.pos)
@@ -211,9 +220,10 @@ class BaseAETEnv(gym.Env):
         return obs, {}
 
     def step(self, action: int):
-        # Monkey-patch controlled agent for this single step
-        # make a filtered copy of the requested action (applies to controlled agent)
         filtered_action = self._filter_action(action)
+        self._action_counts[int(action)] += 1
+        if len(self._first_actions) < 20:
+            self._first_actions.append(int(action))
 
         if self.role == "human":
             orig_act = self.human_agent._act
@@ -250,6 +260,10 @@ class BaseAETEnv(gym.Env):
         # Step the game (uses the patched agent behavior)
         prev_alien_pos = self.alien_agent.pos
         prev_human_pos = self.human_agent.position if self.role == "human" else None
+        # Freeze the alien in place for the first N steps (curriculum: gives human
+        # time to explore and occasionally find the exit before facing a full opponent)
+        if self.step_count < self.alien_freeze_steps:
+            self.alien_agent._rl_action_override = (0, 0)
         self.game._step()
 
         # restore monkey-patches
@@ -262,6 +276,8 @@ class BaseAETEnv(gym.Env):
 
         self.step_count += 1
         outcome = self._check_outcome()
+        if outcome == "alien_caught_human" and self.step_count <= self.alien_freeze_steps:
+            outcome = "ongoing"
         g_coef = max(0.0, 1.0 - ((self.global_step_offset + self.step_count) / self.decay_steps))
 
         # Track exploration: check if current position is new
@@ -284,6 +300,7 @@ class BaseAETEnv(gym.Env):
             # Track consecutive idle steps
             if prev_human_pos is not None and curr_pos == prev_human_pos:
                 self._idle_steps += 1
+                self._total_stuck_steps += 1
             else:
                 self._idle_steps = 0
 
@@ -295,7 +312,7 @@ class BaseAETEnv(gym.Env):
             self._prev_alien_pos = self.alien_agent.pos
         else:
             curr_exit_dist = self._curr_exit_dist()
-            prev_exit_dist = self._prev_exit_dist if self._prev_exit_dist is not None else curr_exit_dist
+            prev_exit_dist = self._prev_exit_dist  # None until exit is first seen; signals found_exit_bonus
             # Compute current map knowledge for discovery bonus
             curr_known_ratio = float((self.human_agent._known_map != HumanAgent.UNKNOWN).mean()) if self.human_agent._known_map is not None else 0.0
             reward, self.first_hide, self._reward_log = self._compute_player_reward(
@@ -318,6 +335,8 @@ class BaseAETEnv(gym.Env):
         terminated = outcome in {"alien_caught_human", "human_reached_exit"}
         truncated = outcome == "max_steps_reached"
         obs = self._get_obs()
+        if self.role == "human":
+            self._last_known_map_mean = float(obs[14:78].mean())
         info = {"outcome": outcome, "step_count": self.step_count, "role": self.role, "reward": reward}
         
         # Log episode summary when terminal
@@ -365,15 +384,21 @@ class BaseAETEnv(gym.Env):
         return reward, first_hide, reward_log
     
     def _log_episode_summary(self, outcome):
-        """Log reward component breakdown for this episode."""
         import json
         summary = {
             "role": self.role,
             "steps": self.step_count,
             "outcome": outcome,
-            "total_reward": self._episode_total_reward,
-            "reward_components": self._reward_log,
+            "total_reward": round(self._episode_total_reward, 3),
+            "reward_components": {k: round(v, 3) for k, v in self._reward_log.items()},
         }
+        if self.role == "human":
+            names = ["WAIT", "N", "E", "S", "W"]
+            summary["action_dist"] = {names[i]: self._action_counts[i] for i in range(5)}
+            summary["first_20_actions"] = [names[a] for a in self._first_actions]
+            # stuck_frac = steps where position didn't change (wall-pressing counts here even without WAIT)
+            summary["stuck_frac"] = round(self._total_stuck_steps / max(self.step_count, 1), 3)
+            summary["known_map_mean"] = round(self._last_known_map_mean, 4)
         print(f"[EPISODE] {json.dumps(summary)}")
 
     def _get_obs(self):
@@ -404,5 +429,5 @@ class AlienEnv(BaseAETEnv):
 
 
 class PlayerEnv(BaseAETEnv):
-    def __init__(self, fixed_map: np.ndarray, max_steps: int = 500, opponent_model=None, global_step_offset: int = 0, decay_steps: int = 300_000):
-        super().__init__(fixed_map, max_steps, role="human", opponent_model=opponent_model, global_step_offset=global_step_offset, decay_steps=decay_steps)
+    def __init__(self, fixed_map: np.ndarray, max_steps: int = 500, opponent_model=None, global_step_offset: int = 0, decay_steps: int = 300_000, alien_freeze_steps: int = 0):
+        super().__init__(fixed_map, max_steps, role="human", opponent_model=opponent_model, global_step_offset=global_step_offset, decay_steps=decay_steps, alien_freeze_steps=alien_freeze_steps)

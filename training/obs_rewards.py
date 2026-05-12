@@ -1,5 +1,5 @@
 import numpy as np
-from agents.alien import AlienState
+
 from agents.human import HumanAgent
 
 
@@ -100,10 +100,19 @@ def get_player_obs(game, human_agent) -> np.ndarray:
 
     made_noise = [1.0 if game.last_noise_ripple is not None else 0.0]
 
+    # Downsampled known map: 1.0 = explored, 0.0 = unknown.
+    # Gives the policy a 2D spatial signal for where to explore next,
+    # analogous to the alien's belief_flat.
+    if human_agent._known_map is not None:
+        known_binary = (human_agent._known_map != HumanAgent.UNKNOWN).astype(np.float32)
+        known_map_small = _resize_bilinear_2d(known_binary, out_size=8).flatten()
+    else:
+        known_map_small = np.zeros(64, dtype=np.float32)
+
     return np.array(
         pos + hidden + radar_oh + [steps_since_radar_norm]
         + exit_delta + exit_known + [n_hiding, known_ratio]
-        + made_noise,
+        + made_noise + list(known_map_small),
         dtype=np.float32
     )
 
@@ -270,16 +279,10 @@ def compute_player_reward(
     ):
         exit_delta = prev_exit_dist - curr_exit_dist
 
-        # Stronger incentive for moving closer
         progress_term = 0.25 * exit_delta
 
-        # Proximity term: being near the exit is good even with small sideways moves
-        # 30.0 is a rough max path length; tune for your maps
-        proximity_term = 0.02 * max(0.0, 30.0 - curr_exit_dist)
-
-        r += progress_term + proximity_term
+        r += progress_term
         reward_log["exit_progress"] += progress_term
-        reward_log["exit_proximity"] += proximity_term
 
         # Small penalty when making effectively no net progress (discourage oscillations)
         if abs(exit_delta) < 0.5:

@@ -474,28 +474,6 @@ class MapGenerator:
                 return d
             for dx, dy in dirs:
                 nx, ny = cx + dx, cy + dy
-                if (
-                    (nx, ny) not in visited
-                    and 0 <= nx < self.width
-                    and 0 <= ny < self.height
-                ):
-                    if self.grid[ny, nx] in passable:
-                        visited.add((nx, ny))
-                        queue.append(((nx, ny), d + 1))
-        return None
-    
-    def _bfs_distance(self, start, goal, passable) -> int | None:
-        if start is None or goal is None:
-            return None
-        visited = {start}
-        queue = deque([(start, 0)])
-        dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
-        while queue:
-            (cx, cy), d = queue.popleft()
-            if (cx, cy) == goal:
-                return d
-            for dx, dy in dirs:
-                nx, ny = cx + dx, cy + dy
                 if (nx, ny) not in visited and 0 <= nx < self.width and 0 <= ny < self.height:
                     if self.grid[ny, nx] in passable:
                         visited.add((nx, ny))

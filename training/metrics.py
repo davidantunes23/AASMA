@@ -5,11 +5,11 @@ Tracks: win rate, catch rate, escape rate, episode length, path efficiency.
 NOT mean reward (reward is for learning, metrics are for validation).
 """
 
-import numpy as np
-from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
-from collections import defaultdict, deque
 import json
+from dataclasses import dataclass, field
+from typing import Dict, List
+
+import numpy as np
 
 
 @dataclass

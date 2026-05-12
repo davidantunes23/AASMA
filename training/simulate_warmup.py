@@ -8,8 +8,6 @@ seed=42 map and saves the same style of animation as simulate_game.py.
 from __future__ import annotations
 
 import argparse
-import os
-import random
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,14 +19,13 @@ if str(ROOT) not in sys.path:
 import numpy as np
 from stable_baselines3 import PPO
 
-from training.envs import AlienEnv, PlayerEnv
-from map_generator import MapGenerator, Tile
-from agents.alien import compute_fov
+from agents.alien import AlienAgent, compute_fov
+from agents.human import Direction as HumanDirection
+from agents.human import HumanAgent
 from game import Game
-from agents.human import HumanAgent, Direction as HumanDirection
-from agents.alien import AlienAgent
-from simulate_game import FrameState, visualize, visualize_world_only, find_tile_pos
-
+from map_generator import MapGenerator, Tile
+from simulate_game import FrameState, find_tile_pos, visualize, visualize_world_only
+from training.envs import AlienEnv, PlayerEnv
 
 @dataclass
 class WarmupModels:
@@ -36,8 +33,8 @@ class WarmupModels:
     player_model: PPO
 
 
-def make_fixed_map(seed: int = 42) -> np.ndarray:
-    generator = MapGenerator(width=60, height=40, alpha=0.0, seed=seed)
+def make_fixed_map(seed: int = 42, width: int = 60, height: int = 40, alpha: float = 0.0) -> np.ndarray:
+    generator = MapGenerator(width=width, height=height, alpha=alpha, seed=seed)
     return generator.generate()
 
 
@@ -59,8 +56,8 @@ def resolve_checkpoint_path(path_value: str) -> str:
 def load_models(alien_path: str, player_path: str, fixed_map: np.ndarray, max_steps: int):
     alien_env = AlienEnv(fixed_map, max_steps=max_steps, opponent_model=None)
     player_env = PlayerEnv(fixed_map, max_steps=max_steps, opponent_model=None)
-    alien_model = PPO.load(resolve_checkpoint_path(alien_path), env=alien_env)
-    player_model = PPO.load(resolve_checkpoint_path(player_path), env=player_env)
+    alien_model = PPO.load(resolve_checkpoint_path(alien_path), env=alien_env, device="cpu")
+    player_model = PPO.load(resolve_checkpoint_path(player_path), env=player_env, device="cpu")
     return WarmupModels(alien_model=alien_model, player_model=player_model)
 
 
@@ -144,6 +141,9 @@ def parse_args():
     parser.add_argument("--alien-model", type=str, default="models/alien_warmup.zip")
     parser.add_argument("--player-model", type=str, default="models/player_warmup.zip")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--map-width", type=int, default=60)
+    parser.add_argument("--map-height", type=int, default=40)
+    parser.add_argument("--map-alpha", type=float, default=0.0)
     parser.add_argument("--max-steps", type=int, default=220)
     parser.add_argument("--view-length", type=int, default=6)
     parser.add_argument("--fps", type=int, default=8)
@@ -158,7 +158,7 @@ def main():
     map_seed = args.seed
     print(f"Using map seed: {map_seed}")
 
-    grid = make_fixed_map(seed=map_seed)
+    grid = make_fixed_map(seed=map_seed, width=args.map_width, height=args.map_height, alpha=args.map_alpha)
     models = load_models(args.alien_model, args.player_model, grid, args.max_steps)
     frames, outcome = run_warmup_episode(models.alien_model, models.player_model, grid, args.max_steps, args.view_length)
     print(f"Simulation finished in {len(frames) - 1} steps with outcome: {outcome}")

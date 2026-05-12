@@ -7,21 +7,21 @@ Phase 2: Train alien PPO against fixed rule-based human until >30% catch rate
 Phase 3: Train both against mix of rule-based + frozen learned opponents with historical pools
 Phase 4: Full AET-style co-training with opponent pools (later)
 """
-import os
-import sys
-from pathlib import Path
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv
 import argparse
-import numpy as np
 import json
+import os
 import random
+import sys
 from dataclasses import dataclass
-from typing import Optional, Dict, List
+from typing import Dict, List, Optional
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
+
+import numpy as np
+from stable_baselines3 import PPO
+from stable_baselines3.common.vec_env import DummyVecEnv
 
 from map_generator import MapGenerator
 from training.envs import AlienEnv, PlayerEnv
@@ -114,20 +114,22 @@ def make_fixed_map(seed=42, width=40, height=30, alpha=-0.1):
     return grid
 
 
-def evaluate_agent(role: str, model, opponent_model, fixed_map: np.ndarray, 
-                   episodes: int = 20, max_steps: int = 500, seed: int = 42):
+def evaluate_agent(role: str, model, opponent_model, fixed_map: np.ndarray,
+                   episodes: int = 20, max_steps: int = 500, seed: int = 42,
+                   alien_freeze_steps: int = 0):
     """Evaluate agent win rate against an opponent.
-    
+
     Returns: win_count, total_episodes, outcome_counts
     """
     wins = 0
     outcomes = {"alien_caught_human": 0, "human_reached_exit": 0, "max_steps_reached": 0}
-    
+
     for episode in range(episodes):
         if role == "alien":
             env = AlienEnv(fixed_map, max_steps=max_steps, opponent_model=opponent_model)
         else:
-            env = PlayerEnv(fixed_map, max_steps=max_steps, opponent_model=opponent_model)
+            env = PlayerEnv(fixed_map, max_steps=max_steps, opponent_model=opponent_model,
+                            alien_freeze_steps=alien_freeze_steps)
         
         obs, _ = env.reset(seed=seed + episode)
         done = False
@@ -153,20 +155,23 @@ def train_phase_1(fixed_map: np.ndarray, args):
     print("\n" + "="*60)
     print("PHASE 1: Train HUMAN against rule-based alien")
     print("="*60)
-    print(f"Target: >20% escape rate")
+    print("Target: >20% escape rate")
     print(f"Max steps per phase: {args.phase1_max_steps}")
     print()
     
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Create environment (opponent_model=None means rule-based alien)
-    player_env = DummyVecEnv([lambda: PlayerEnv(fixed_map, max_steps=args.max_steps, 
-                                                 opponent_model=None)])
+    freeze = args.alien_freeze_steps
+    player_env = DummyVecEnv([lambda: PlayerEnv(fixed_map, max_steps=args.max_steps,
+                                                 opponent_model=None,
+                                                 alien_freeze_steps=freeze)])
     
     # Create or load model
     player_model = PPO("MlpPolicy", env=player_env, verbose=1,
                        gamma=0.99, learning_rate=5e-5,
-                       ent_coef=0.01, n_steps=400, batch_size=64)
+                       ent_coef=0.01, n_steps=400, batch_size=80,
+                       device="cpu")
     
     # Training loop with periodic evaluation
     total_steps = 0
@@ -179,8 +184,9 @@ def train_phase_1(fixed_map: np.ndarray, args):
         
         # Evaluate
         win_rate, outcomes = evaluate_agent(
-            "human", player_model, None, fixed_map, 
-            episodes=args.eval_episodes, max_steps=args.max_steps
+            "human", player_model, None, fixed_map,
+            episodes=args.eval_episodes, max_steps=args.max_steps,
+            alien_freeze_steps=args.alien_freeze_steps,
         )
         
         print(f"\n[Phase 1] Steps: {total_steps:7d} | Win Rate: {win_rate:.2%} | Outcomes: {outcomes}")
@@ -205,7 +211,7 @@ def train_phase_2(fixed_map: np.ndarray, args):
     print("\n" + "="*60)
     print("PHASE 2: Train ALIEN against rule-based human")
     print("="*60)
-    print(f"Target: >30% catch rate")
+    print("Target: >30% catch rate")
     print(f"Max steps per phase: {args.phase2_max_steps}")
     print()
     
@@ -218,7 +224,8 @@ def train_phase_2(fixed_map: np.ndarray, args):
     # Create or load model
     alien_model = PPO("MlpPolicy", env=alien_env, verbose=1,
                       gamma=0.99, learning_rate=5e-5,
-                      ent_coef=0.01, n_steps=400, batch_size=64)
+                      ent_coef=0.01, n_steps=400, batch_size=80,
+                      device="cpu")
     
     # Training loop with periodic evaluation
     total_steps = 0
@@ -264,9 +271,9 @@ def train_phase_3(fixed_map: np.ndarray, player_model, alien_model, args):
     print("\n" + "="*60)
     print("PHASE 3: Train BOTH with historical opponent pools")
     print("="*60)
-    print(f"Human: vs mix of frozen alien checkpoints + rule-based")
-    print(f"Alien: vs mix of frozen human checkpoints + rule-based")
-    print(f"Pool sampling: 75% latest, 25% history")
+    print("Human: vs mix of frozen alien checkpoints + rule-based")
+    print("Alien: vs mix of frozen human checkpoints + rule-based")
+    print("Pool sampling: 75% latest, 25% history")
     print(f"Duration: {args.phase3_steps} steps each")
     print()
     
@@ -473,6 +480,8 @@ if __name__ == "__main__":
                         help="Max size of historical opponent pool")
     parser.add_argument("--checkpoint-interval", type=int, default=5000,
                         help="Save checkpoint every N steps")
+    parser.add_argument("--alien-freeze-steps", type=int, default=150,
+                        help="Phase 1: alien stays frozen for this many steps per episode (curriculum)")
     
     args = parser.parse_args()
     main(args)
