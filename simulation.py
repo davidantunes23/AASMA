@@ -46,6 +46,8 @@ class AgentFrame:
     hidden: bool = False
     knowledge_map: Optional[np.ndarray] = None
     mode: str = ""  # human: EXPLORING/FLEEING/HIDING; alien: SEARCH/INVESTIGATE/HUNT
+    fov: frozenset = field(default_factory=frozenset)         # (y,x) cells visible this step
+    visible_opponent: Optional[tuple[int, int]] = None        # opponent pos if inside FOV and not hidden
 
 
 @dataclass
@@ -75,7 +77,9 @@ class GenericKnowledge:
         self.known_map = np.full(self.grid_shape, UNKNOWN_TILE, dtype=np.int16)
 
     def update_from_observation(self, observation: np.ndarray):
-        visible_mask = observation != UNKNOWN_TILE
+        # Only store valid tile IDs (0–6). Marker values like RADAR_PING (-3)
+        # must not be written here — they'd render as out-of-range colormap indices.
+        visible_mask = observation >= 0
         self.known_map[visible_mask] = observation[visible_mask]
 
     def get_copy(self) -> np.ndarray:
@@ -123,6 +127,7 @@ class GenericMapSimulation:
         default_alien_view: int = 6,
         enable_mechanics: bool = True,
         p_noise: float = 0.1,
+        noise_radius: int = 2,
         radar_interval: int = 5,
         seed: int = 0,
     ):
@@ -133,6 +138,7 @@ class GenericMapSimulation:
         self.default_alien_view = default_alien_view
         self.enable_mechanics = enable_mechanics
         self.p_noise = p_noise
+        self.noise_radius = noise_radius
         self.radar_interval = radar_interval
         self._rng = np.random.default_rng(seed)  # seeded RNG — no global state pollution
 
@@ -258,14 +264,13 @@ class GenericMapSimulation:
         hy, hx = human_pos_yx
         heard_yx = (hy, hx)
         if not human_hidden and self._rng.random() < self.p_noise:
-            off_y = int(self._rng.integers(-4, 5))
-            off_x = int(self._rng.integers(-4, 5))
+            off_y = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
+            off_x = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
             ny = max(0, min(hy + off_y, self.grid.shape[0] - 1))
             nx = max(0, min(hx + off_x, self.grid.shape[1] - 1))
             heard_yx = (ny, nx)
             self.last_noise_ripple = (hy, hx)
             self.noise_ripple_age = 0
-            print(f"[noise] human={human_pos_yx} heard={heard_yx} offset=({off_y},{off_x})")
         if self.last_noise_ripple is not None:
             self.noise_ripple_age += 1
             if self.noise_ripple_age > 2:
@@ -274,10 +279,19 @@ class GenericMapSimulation:
 
     # ── Agent helpers ─────────────────────────────────────────────────────────
 
-    def _update_knowledge(self, label: str, position: tuple[int, int], radius: int):
+    def _update_knowledge(
+        self,
+        label: str,
+        position: tuple[int, int],
+        radius: int,
+        direction: Direction | None = None,
+    ):
         if self.knowledge_mode != "on":
             return
-        observation = self._partial_observation(position, radius)
+        if self.enable_mechanics and direction is not None:
+            observation = self._cone_observation(position, direction, radius)
+        else:
+            observation = self._partial_observation(position, radius)
         self.knowledge[label].update_from_observation(observation)
 
     def _is_hidden_position(self, position: tuple[int, int]) -> bool:
@@ -307,8 +321,28 @@ class GenericMapSimulation:
             else:
                 mode = ""
 
+            # Compute cone FOV for this agent
+            direction = getattr(spec.agent, "direction", None)
+            view_len = getattr(spec.agent, "view_length", self.default_human_view)
+            if direction is not None and self.enable_mechanics:
+                fov: frozenset = frozenset(cone_fov(self.grid, position, direction, view_len))
+            else:
+                fov = frozenset()
+
+            # Find the nearest visible opponent (in FOV, not hiding)
+            visible_opponent = None
+            for other in self.agents:
+                if other.role != spec.role:
+                    opp_pos = self._get_position(other)
+                    opp_hidden = (bool(getattr(other.agent, "hidden", False))
+                                  or self._is_hidden_position(opp_pos))
+                    if opp_pos in fov and not opp_hidden:
+                        visible_opponent = opp_pos
+                        break
+
             snapshot.append(AgentFrame(label=spec.label, role=spec.role, position=position,
-                                       hidden=hidden, knowledge_map=knowledge_map, mode=mode))
+                                       hidden=hidden, knowledge_map=knowledge_map, mode=mode,
+                                       fov=fov, visible_opponent=visible_opponent))
         return snapshot
 
     def _is_human(self, spec: AgentSpec) -> bool:
@@ -376,19 +410,30 @@ class GenericMapSimulation:
 
             for spec in self.agents:
                 current_position = self._get_position(spec)
-                opposing_positions = [
-                    self._get_position(other)
-                    for other in self.agents
-                    if other.label != spec.label
-                    and other.role != spec.role
-                    and not (other.role == "human" and self._is_hidden_position(self._get_position(other)))
-                ]
+                # Aliens always receive the actual human position — hiding is handled internally
+                # by AlienAgent.step() via player_hiding detection. Excluding the hidden human
+                # here would cause nearest_target to fall back to the alien's own position,
+                # making the alien think it sees itself as the player.
+                if spec.role == "alien":
+                    opposing_positions = [
+                        self._get_position(other)
+                        for other in self.agents
+                        if other.label != spec.label and other.role != spec.role
+                    ]
+                else:
+                    opposing_positions = [
+                        self._get_position(other)
+                        for other in self.agents
+                        if other.label != spec.label
+                        and other.role != spec.role
+                        and not (other.role == "human" and self._is_hidden_position(self._get_position(other)))
+                    ]
                 nearest_target = self._nearest_target(current_position, opposing_positions) or current_position
                 radius = self._view_radius_for(spec)
-                self._update_knowledge(spec.label, current_position, radius)
+                direction = getattr(spec.agent, "direction", None)
+                self._update_knowledge(spec.label, current_position, radius, direction)
 
                 # Build observation (cone for agents with a direction, circular otherwise)
-                direction = getattr(spec.agent, "direction", None)
                 if self.enable_mechanics and direction is not None:
                     obs = self._cone_observation(current_position, direction, radius)
                 else:
@@ -443,6 +488,7 @@ class GenericMapSimulation:
             fig, ax = plt.subplots(1, 1, figsize=(8, 6), dpi=120)
             fig.patch.set_facecolor("#000000")
             ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=6)
+            ax.autoscale(False)  # prevent large Circle patches from shrinking the map
             ax.set_title("Game World", color="white", fontsize=13, fontweight="bold")
             ax.set_xticks([])
             ax.set_yticks([])
@@ -578,6 +624,7 @@ class GenericMapSimulation:
 
         world_ax = axes[0]
         world_ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=6)
+        world_ax.autoscale(False)  # prevent large Circle patches from shrinking the map
         world_ax.set_title("World", color="white", fontsize=12, fontweight="bold")
         world_ax.set_xticks([])
         world_ax.set_yticks([])
@@ -607,6 +654,9 @@ class GenericMapSimulation:
         knowledge_axes = axes[1:]
         knowledge_images = []
         knowledge_markers = []
+        fov_overlays = []     # semi-transparent FOV highlight per panel
+        opp_markers = []      # visible-opponent marker per panel
+        H_grid, W_grid = self.grid.shape
         for axis, agent in zip(knowledge_axes, frames[0].agents):
             axis.set_title(f"{agent.label} ({agent.role})", color="white", fontsize=11, fontweight="bold")
             axis.set_xticks([])
@@ -615,7 +665,7 @@ class GenericMapSimulation:
             if agent.knowledge_map is None:
                 initial = np.full(self.grid.shape, unknown_value, dtype=np.int16)
             else:
-                initial = np.where(agent.knowledge_map == UNKNOWN_TILE, unknown_value, agent.knowledge_map)
+                initial = np.where(agent.knowledge_map < 0, unknown_value, agent.knowledge_map)
             image = axis.imshow(initial, cmap=knowledge_cmap, vmin=0, vmax=7)
             knowledge_images.append(image)
             y, x = agent.position
@@ -625,6 +675,17 @@ class GenericMapSimulation:
                 axis.scatter([x], [y], s=95, c=marker_color, edgecolors="white", linewidths=0.7,
                              marker=marker_style, zorder=5)
             )
+            # FOV overlay: RGBA image, cells in FOV get a faint tint
+            fov_rgba = np.zeros((H_grid, W_grid, 4), dtype=np.float32)
+            fov_img = axis.imshow(fov_rgba, zorder=3)
+            fov_overlays.append((fov_img, agent.role))
+            # Visible-opponent marker (opponent's style, shown when in FOV)
+            opp_style = "o" if agent.role == "alien" else "X"
+            opp_color = "#00D4FF" if agent.role == "alien" else "#FF4D6D"
+            opp_m = axis.scatter([x], [y], s=95, c=opp_color, edgecolors="white",
+                                 linewidths=1.2, marker=opp_style, zorder=6)
+            opp_m.set_visible(False)
+            opp_markers.append(opp_m)
 
         # Radar threat rings on world panel
         _THREAT_RING_CFG = [
@@ -674,14 +735,31 @@ class GenericMapSimulation:
                     hidden_rings[human_ring_idx].set_offsets([[x, y]])
                     hidden_rings[human_ring_idx].set_visible(agent.hidden)
                     human_ring_idx += 1
-            for image, marker, agent in zip(knowledge_images, knowledge_markers, state.agents):
+            for image, marker, (fov_img, role), opp_m, agent in zip(
+                knowledge_images, knowledge_markers, fov_overlays, opp_markers, state.agents
+            ):
                 if agent.knowledge_map is None:
                     data = np.full(self.grid.shape, unknown_value, dtype=np.int16)
                 else:
-                    data = np.where(agent.knowledge_map == UNKNOWN_TILE, unknown_value, agent.knowledge_map)
+                    data = np.where(agent.knowledge_map < 0, unknown_value, agent.knowledge_map)
                 image.set_data(data)
                 y, x = agent.position
                 marker.set_offsets([[x, y]])
+
+                # FOV overlay — faint tint on currently visible cells
+                fov_rgba = np.zeros((H_grid, W_grid, 4), dtype=np.float32)
+                tint = (1.0, 0.3, 0.4, 0.18) if role == "alien" else (0.0, 0.83, 1.0, 0.18)
+                for vy, vx in agent.fov:
+                    fov_rgba[vy, vx] = tint
+                fov_img.set_data(fov_rgba)
+
+                # Visible-opponent marker
+                if agent.visible_opponent is not None:
+                    oy, ox = agent.visible_opponent
+                    opp_m.set_offsets([[ox, oy]])
+                    opp_m.set_visible(True)
+                else:
+                    opp_m.set_visible(False)
 
             # Radar threat rings
             humans = [a for a in state.agents if a.role == "human"]
@@ -724,8 +802,10 @@ class GenericMapSimulation:
                 f"  Alien: {alien_mode:<11}"
                 f"  |  {outcome}"
             )
+            fov_imgs = [img for img, _ in fov_overlays]
             return [*world_markers, *hidden_rings, *threat_rings, *ripple_circles,
-                    *alien_heard_markers, *knowledge_images, *knowledge_markers, status_text]
+                    *alien_heard_markers, *knowledge_images, *knowledge_markers,
+                    *fov_imgs, *opp_markers, status_text]
 
         animation = FuncAnimation(fig, update_full, frames=len(frames),
                                   interval=max(1, int(1000 / max(1, fps))), blit=False, repeat=False)

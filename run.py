@@ -40,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-render", action="store_true", help="Skip GIF rendering (useful for debug runs)")
     parser.add_argument("--human-view", type=int, default=6, help="Human observation radius (default: 6)")
     parser.add_argument("--alien-fov", type=int, default=6, help="Alien FOV radius (default: 6)")
+    parser.add_argument("--noise-radius", type=int, default=2, help="Max cell offset for player noise (default: 2)")
     return parser.parse_args()
 
 
@@ -84,6 +85,7 @@ def main():
         default_human_view=args.human_view,
         default_alien_view=args.alien_fov,
         enable_mechanics=(args.demo == "rule"),
+        noise_radius=args.noise_radius,
         seed=args.seed,
     )
 

@@ -304,12 +304,6 @@ class AlienAgent(BaseAlienAgent):
         # STEP 4: STATE TRANSITION
         prev = self.state
         self._transition(player_seen, player_hiding, player_pos)
-        print(
-            f"[alien s={step_num:3d}] pos={self.pos} dir={self.direction.name:<5} "
-            f"state={self.state.name:<11} in_fov={in_fov} "
-            f"seen={player_seen} hiding={player_hiding} known_hiding={self.player_known_hiding} "
-            f"path_len={len(self.path)}"
-        )
         if self.state != prev:
             self.steps_in_state = 0
             self.path = []
@@ -380,13 +374,15 @@ class AlienAgent(BaseAlienAgent):
             self.last_known_pos = player_pos
             self.player_known_hiding = False
             self.state = AlienState.HUNT
-        elif player_hiding:
-            # Alien sees player inside a hiding spot — record location and rush in
+        elif player_hiding and self.state == AlienState.HUNT:
+            # Player ducked into a hide spot while the alien was already chasing them.
+            # Only rush in if the alien was already in HUNT — otherwise it has no reason
+            # to know the player is inside (it just sees a hide tile, not the player).
             self.last_known_pos = player_pos
             self.player_known_hiding = True
-            self.path = []                        # must replan: passable set changes to include HIDE
+            self.path = []
             self.steps_no_replan = self.replan_every
-            self.state = AlienState.HUNT
+            # state stays HUNT
         elif self.state == AlienState.HUNT:
             self.player_known_hiding = False
             if self.last_heard_pos is None or self.steps_since_heard > 5:
@@ -404,15 +400,19 @@ class AlienAgent(BaseAlienAgent):
         seen_vents = self.knowledge.get_seen_vents()
         if len(seen_vents) < 2:
             return None
-        direct_dist = heuristic(self.pos, sound_pos)
+        direct_path = astar(self.grid, self.pos, sound_pos, PASSABLE_ALIEN)
+        direct_dist = len(direct_path) - 1 if direct_path else float("inf")
         if direct_dist < VENT_ROUTE_MIN_SOUND_DISTANCE:
             return None
         start_vent = min(seen_vents, key=lambda v: heuristic(self.pos, v))
         dest_vent = min(seen_vents, key=lambda v: heuristic(v, sound_pos))
         if start_vent == dest_vent:
             return None
-        dist_via_vent = heuristic(self.pos, start_vent) + VENT_TELEPORT_COST + heuristic(dest_vent, sound_pos)
-        if direct_dist - dist_via_vent < VENT_ROUTE_MIN_SAVINGS:
+        entry_path = astar(self.grid, self.pos, start_vent, PASSABLE_ALIEN)
+        entry_dist = len(entry_path) - 1 if entry_path else float("inf")
+        exit_path = astar(self.grid, dest_vent, sound_pos, PASSABLE_ALIEN)
+        exit_dist = len(exit_path) - 1 if exit_path else float("inf")
+        if direct_dist - (entry_dist + VENT_TELEPORT_COST + exit_dist) < VENT_ROUTE_MIN_SAVINGS:
             return None
         return start_vent
 
@@ -422,13 +422,16 @@ class AlienAgent(BaseAlienAgent):
         seen_vents = self.knowledge.get_seen_vents()
         if len(seen_vents) < 2:
             return None
-        direct_dist = heuristic(self.pos, sound_pos)
+        direct_path = astar(self.grid, self.pos, sound_pos, PASSABLE_ALIEN)
+        direct_dist = len(direct_path) - 1 if direct_path else float("inf")
         if direct_dist < VENT_ROUTE_MIN_SOUND_DISTANCE:
             return None
         best_vent = min(seen_vents, key=lambda v: heuristic(v, sound_pos))
         if best_vent == self.pos:
             return None
-        if direct_dist - (VENT_TELEPORT_COST + heuristic(best_vent, sound_pos)) < VENT_ROUTE_MIN_SAVINGS:
+        exit_path = astar(self.grid, best_vent, sound_pos, PASSABLE_ALIEN)
+        exit_dist = len(exit_path) - 1 if exit_path else float("inf")
+        if direct_dist - (VENT_TELEPORT_COST + exit_dist) < VENT_ROUTE_MIN_SAVINGS:
             return None
         return best_vent
 
@@ -439,7 +442,9 @@ class AlienAgent(BaseAlienAgent):
         self.steps_no_replan = self.replan_every
 
     def _move_one(self, player_pos: tuple, player_seen: bool) -> tuple:
-        if not self.path or self.steps_no_replan >= self.replan_every:
+        # Always replan in HUNT so the 2-cell-per-step movement never overshoots
+        # the player's position using a stale path from a previous step.
+        if not self.path or self.steps_no_replan >= self.replan_every or self.state == AlienState.HUNT:
             self.path = self._plan_path(player_pos, player_seen)
             self.steps_no_replan = 0
 
@@ -531,7 +536,9 @@ class AlienAgent(BaseAlienAgent):
                 goal = self.last_known_pos
 
         else:  # SEARCH
-            frontiers = self.knowledge.get_unknown_frontier()
+            # Exclude current position: it's often a frontier (unknown cells behind the agent)
+            # but A*(pos, pos) produces no movement.
+            frontiers = [f for f in self.knowledge.get_unknown_frontier() if f != self.pos]
             if frontiers:
                 goal = min(frontiers, key=lambda f: heuristic(self.pos, f))
             elif self.last_heard_pos is not None and self.steps_since_heard <= 10:
