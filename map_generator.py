@@ -25,6 +25,8 @@ import random
 from collections import deque
 from enum import IntEnum
 
+import matplotlib.patches as mpatches
+import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -689,58 +691,266 @@ def run_demo(seed: int | None = None):
     # visualise_pygame(g0)
 
 
+# ── Visualization ─────────────────────────────────────────────────────────────
+
+TILE_COLORS = {
+    Tile.WALL: "#1a1a2e",
+    Tile.FLOOR: "#2e2e4a",
+    Tile.VENT: "#9b59b6",
+    Tile.HIDE: "#27ae60",
+    Tile.PLAYER_START: "#2980b9",
+    Tile.ALIEN_START: "#c0392b",
+    Tile.EXIT: "#f39c12",
+}
+
+TILE_LABELS = {
+    Tile.WALL: "Wall",
+    Tile.FLOOR: "Floor",
+    Tile.VENT: "Vent (alien shortcut)",
+    Tile.HIDE: "Hiding Spot",
+    Tile.PLAYER_START: "Player Start",
+    Tile.ALIEN_START: "Alien Start",
+    Tile.EXIT: "Exit",
+}
+
+TILE_SYMBOLS = {
+    Tile.VENT: "V",
+    Tile.HIDE: "H",
+    Tile.PLAYER_START: "P",
+    Tile.ALIEN_START: "A",
+    Tile.EXIT: "E",
+}
+
+
+def visualise_map(
+    gen: "MapGenerator",
+    title: str | None = None,
+    save_path: str | None = None,
+    cell_size: float = 0.55,
+    show_grid: bool = True,
+    show_symbols: bool = True,
+    show_distances: bool = True,
+    ax=None,
+):
+    grid = gen.grid
+    H, W = grid.shape
+
+    rgb = np.zeros((H, W, 3))
+    for tile_id, hex_color in TILE_COLORS.items():
+        r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+        mask = grid == tile_id
+        rgb[mask] = [r / 255, g / 255, b / 255]
+
+    standalone = ax is None
+    if standalone:
+        fig, ax = plt.subplots(figsize=(W * cell_size, H * cell_size), facecolor="#0d0d1a")
+
+    ax.imshow(rgb, interpolation="nearest", aspect="equal")
+
+    if show_grid:
+        for x in range(W + 1):
+            ax.axvline(x - 0.5, color="#0d0d1a", lw=0.4, alpha=0.7)
+        for y in range(H + 1):
+            ax.axhline(y - 0.5, color="#0d0d1a", lw=0.4, alpha=0.7)
+
+    if show_symbols:
+        sym_fontsize = max(5, min(10, int(cell_size * 14)))
+        for tile_id, symbol in TILE_SYMBOLS.items():
+            ys, xs = np.where(grid == tile_id)
+            for x, y in zip(xs, ys):
+                ax.text(x, y, symbol, ha="center", va="center", fontsize=sym_fontsize,
+                        fontweight="bold", color="white", alpha=0.92)
+
+    m = gen.metadata
+    alpha_sign = "+" if gen.alpha >= 0 else ""
+    auto_title = f"Map  |  seed={gen.seed}  alpha={alpha_sign}{gen.alpha:.2f}  rooms={m.get('n_rooms', '?')}  {W}×{H}"
+    if show_distances:
+        sub = (
+            f"P→exit: {m.get('dist_player_exit')} steps   "
+            f"A→exit: {m.get('dist_alien_exit')} steps   "
+            f"A→P: {m.get('dist_alien_player')} steps   "
+            f"vents: {m.get('vent_ratio', 0):.1%}   "
+            f"hides: {m.get('hide_number', 0)}"
+        )
+        ax.set_title((title or auto_title) + "\n" + sub, color="white", fontsize=9, pad=8, linespacing=1.6)
+    else:
+        ax.set_title(title or auto_title, color="white", fontsize=10, pad=8)
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_edgecolor("#444")
+        spine.set_linewidth(0.5)
+    ax.set_facecolor("#0d0d1a")
+
+    patches = [
+        mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
+        for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]
+    ]
+    ax.legend(handles=patches, loc="lower center", bbox_to_anchor=(0.5, -0.13), ncol=4,
+              framealpha=0.15, facecolor="#1a1a2e", edgecolor="#444", fontsize=7.5,
+              labelcolor="white", handlelength=1.2, handleheight=0.9, borderpad=0.7, columnspacing=1.0)
+
+    if standalone:
+        fig.patch.set_facecolor("#0d0d1a")
+        plt.tight_layout(rect=[0, 0.08, 1, 1])
+        if save_path:
+            os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+            fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="#0d0d1a")
+            print(f"Saved -> {save_path}")
+        return fig, ax
+
+    return None, ax
+
+
+def visualise_alpha_comparison(
+    alphas: list = (-1.0, -0.5, 0.0, 0.5, 1.0),
+    seed: int = 42,
+    width: int = 32,
+    height: int = 18,
+    save_path: str = "output/alpha_comparison.png",
+    cell_size: float = 0.38,
+):
+    n = len(alphas)
+    fig, axes = plt.subplots(1, n, figsize=(width * cell_size * n * 0.52, height * cell_size * 1.55),
+                             facecolor="#0d0d1a")
+    if n == 1:
+        axes = [axes]
+
+    for ax, alpha in zip(axes, alphas):
+        gen = MapGenerator(width=width, height=height, alpha=alpha, seed=seed)
+        gen.generate()
+        sign = "+" if alpha >= 0 else ""
+        visualise_map(gen, title=f"alpha = {sign}{alpha:.1f}", show_distances=False, cell_size=cell_size, ax=ax)
+        ax.set_title(f"alpha = {sign}{alpha:.1f}\nvents {gen.metadata['vent_ratio']:.1%}  hides {gen.metadata['hide_number']}",
+                     color="white", fontsize=8, pad=5)
+
+    patches = [mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
+               for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]]
+    fig.legend(handles=patches, loc="lower center", ncol=7, framealpha=0.15, facecolor="#1a1a2e",
+               edgecolor="#555", fontsize=7.5, labelcolor="white", handlelength=1.2, borderpad=0.7,
+               bbox_to_anchor=(0.5, 0.0))
+    fig.suptitle("Alien Isolation Map Generator  —  Alpha Advantage Comparison", color="white", fontsize=11, y=1.01)
+    plt.tight_layout(rect=[0, 0.06, 1, 1])
+    os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="#0d0d1a")
+    print(f"Saved -> {save_path}")
+    return fig
+
+
+def visualise_current_maps_comparison(
+    maps: list,
+    labels: list | None = None,
+    save_path: str = "output/current_maps_comparison.png",
+    cell_size: float = 0.38,
+):
+    if not maps:
+        raise ValueError("maps must not be empty")
+
+    n = len(maps)
+    width = maps[0].width
+    height = maps[0].height
+    fig, axes = plt.subplots(1, n, figsize=(width * cell_size * n * 0.52, height * cell_size * 1.55),
+                             facecolor="#0d0d1a")
+    if n == 1:
+        axes = [axes]
+
+    labels = labels or [f"map {i + 1}" for i in range(n)]
+    for ax, gen, label in zip(axes, maps, labels):
+        visualise_map(gen, title=label, show_distances=False, cell_size=cell_size, ax=ax)
+        ax.set_title(f"{label}\nvents {gen.metadata['vent_ratio']:.1%}  hides {gen.metadata['hide_number']}",
+                     color="white", fontsize=8, pad=5)
+
+    patches = [mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
+               for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]]
+    fig.legend(handles=patches, loc="lower center", ncol=7, framealpha=0.15, facecolor="#1a1a2e",
+               edgecolor="#555", fontsize=7.5, labelcolor="white", handlelength=1.2, borderpad=0.7,
+               bbox_to_anchor=(0.5, 0.0))
+    fig.suptitle("Current Map Comparison", color="white", fontsize=11, y=1.01)
+    plt.tight_layout(rect=[0, 0.06, 1, 1])
+    os.makedirs(os.path.dirname(os.path.abspath(save_path)), exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="#0d0d1a")
+    print(f"Saved -> {save_path}")
+    return fig
+
+
+def render_saved_map(json_path: str, png_path: str):
+    if not os.path.exists(json_path):
+        print(f"Skipped -> {json_path} not found")
+        return None
+    saved_map = MapGenerator.load(json_path)
+    visualise_map(saved_map, save_path=png_path)
+    return saved_map
+
+
+def run_demo(seed: int | None = None):
+    if seed is None:
+        seed = random.randint(0, 2**31)
+
+    gen_balanced = MapGenerator(width=60, height=40, alpha=0.0, seed=seed)
+    gen_balanced.generate()
+    visualise_map(gen_balanced, save_path="output/map_balanced.png")
+
+    gen_alien = MapGenerator(width=60, height=40, alpha=0.8, seed=seed)
+    gen_alien.generate()
+    visualise_map(gen_alien, save_path="output/map_alien_favoured.png")
+
+    gen_player = MapGenerator(width=60, height=40, alpha=-0.8, seed=seed)
+    gen_player.generate()
+    visualise_map(gen_player, save_path="output/map_player_favoured.png")
+
+    visualise_current_maps_comparison(
+        [gen_balanced, gen_alien, gen_player],
+        labels=["balanced", "alien-favoured", "player-favoured"],
+        save_path="output/current_maps_comparison.png",
+    )
+    render_saved_map("maps/demo_balanced.json", "output/map_balanced_from_json.png")
+    print("All done!")
+
+
+# ── CLI ────────────────────────────────────────────────────────────────────────
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Alien Isolation-inspired map generator")
-    parser.add_argument(
-        "seed",
-        nargs="?",
-        type=int,
-        default=None,
-        help="Optional integer seed. Different seeds produce different maps.",
-    )
-    parser.add_argument(
-        "--width",
-        type=int,
-        default=32,
-        help="Map width in cells (default: 32)",
-    )
-    parser.add_argument(
-        "--height",
-        type=int,
-        default=20,
-        help="Map height in cells (default: 20)",
-    )
+    parser.add_argument("seed", nargs="?", type=int, default=None,
+                        help="Optional integer seed.")
+    parser.add_argument("--width", type=int, default=32, help="Map width (default: 32)")
+    parser.add_argument("--height", type=int, default=20, help="Map height (default: 20)")
+    parser.add_argument("--visualize", action="store_true",
+                        help="Save PNG visualizations instead of printing to terminal")
     args = parser.parse_args()
 
-    # Override demo to use specified dimensions
     seed = args.seed
     if seed is None:
         seed = random.randint(0, 2**31 - 1)
 
-    print()
-    print("=" * 70)
-    print(f"  BALANCED  (alpha = 0.0, seed = {seed})  [{args.width}x{args.height}]")
-    print("=" * 70)
-    g0 = MapGenerator(width=args.width, height=args.height, alpha=0.0, seed=seed)
-    g0.generate()
-    g0.print_map()
+    if args.visualize:
+        run_demo(seed)
+    else:
+        print()
+        print("=" * 70)
+        print(f"  BALANCED  (alpha = 0.0, seed = {seed})  [{args.width}x{args.height}]")
+        print("=" * 70)
+        g0 = MapGenerator(width=args.width, height=args.height, alpha=0.0, seed=seed)
+        g0.generate()
+        g0.print_map()
 
-    print()
-    print("=" * 70)
-    print(f"  ALIEN-FAVOURED  (alpha = +0.8, seed = {seed})  [{args.width}x{args.height}]")
-    print("=" * 70)
-    g_a = MapGenerator(width=args.width, height=args.height, alpha=0.8, seed=seed)
-    g_a.generate()
-    g_a.print_map()
+        print()
+        print("=" * 70)
+        print(f"  ALIEN-FAVOURED  (alpha = +0.8, seed = {seed})  [{args.width}x{args.height}]")
+        print("=" * 70)
+        g_a = MapGenerator(width=args.width, height=args.height, alpha=0.8, seed=seed)
+        g_a.generate()
+        g_a.print_map()
 
-    print()
-    print("=" * 70)
-    print(f"  PLAYER-FAVOURED  (alpha = -0.8, seed = {seed})  [{args.width}x{args.height}]")
-    print("=" * 70)
-    g_p = MapGenerator(width=args.width, height=args.height, alpha=-0.8, seed=seed)
-    g_p.generate()
-    g_p.print_map()
+        print()
+        print("=" * 70)
+        print(f"  PLAYER-FAVOURED  (alpha = -0.8, seed = {seed})  [{args.width}x{args.height}]")
+        print("=" * 70)
+        g_p = MapGenerator(width=args.width, height=args.height, alpha=-0.8, seed=seed)
+        g_p.generate()
+        g_p.print_map()
 
-    g0.save(f"maps/demo_balanced_seed_{seed}.json")
-    print()
+        g0.save(f"maps/demo_balanced_seed_{seed}.json")
+        print()
     print(f"Saved maps/demo_balanced_seed_{seed}.json")
