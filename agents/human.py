@@ -27,6 +27,10 @@ class HumanAgent(BaseHumanAgent):
         self.last_radar_dist: int | None = None
         self._known_map: np.ndarray | None = None
         self._known_exit: tuple[int, int] | None = None
+        self._known_missions: set[tuple[int, int]] = set()
+        self._completed_missions: set[tuple[int, int]] = set()
+        self._current_objective: tuple[int, int] | None = None
+        self.mission_manager = None
         self._observed_aliens: set[tuple[int, int]] = set()
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -57,9 +61,16 @@ class HumanAgent(BaseHumanAgent):
             else:
                 return self.pos
 
-        # PRIORITY 2: Run to exit once known
-        if self._known_exit is not None:
-            nxt = self._step_toward_target(self._known_exit)
+        # PRIORITY 2: Handle current objective (mission or exit)
+        self._current_objective = self._select_objective()
+        if self._current_objective is not None and self._current_objective in self._known_missions:
+            if self.pos == self._current_objective:
+                self._advance_current_mission()
+                self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                return self.pos
+
+        if self._current_objective is not None:
+            nxt = self._step_toward_target(self._current_objective)
             if nxt is not None and nxt != self.pos:
                 self.pos = nxt
                 self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
@@ -102,6 +113,9 @@ class HumanAgent(BaseHumanAgent):
             self.pos = start_pos
         self._known_map = None
         self._known_exit = None
+        self._known_missions = set()
+        self._completed_missions = set()
+        self._current_objective = None
         self._observed_aliens = set()
         self.hidden = False
         self.last_radar_threat = None
@@ -114,6 +128,9 @@ class HumanAgent(BaseHumanAgent):
             return
         self._known_map = np.full(obs.shape, self.UNKNOWN, dtype=np.int16)
         self._known_exit = None
+        self._known_missions = set()
+        self._completed_missions = set()
+        self._current_objective = None
         self._observed_aliens = set()
 
     def _integrate_observation(self, obs: np.ndarray):
@@ -133,6 +150,11 @@ class HumanAgent(BaseHumanAgent):
         ey, ex = np.where(self._known_map == int(Tile.EXIT))
         if len(ey) > 0:
             self._known_exit = (int(ey[0]), int(ex[0]))
+        my, mx = np.where(self._known_map == int(Tile.MISSION))
+        if len(my) > 0:
+            seen = {(int(y), int(x)) for y, x in zip(my, mx)}
+            self._known_missions |= seen
+            self._known_missions -= self._completed_missions
 
     # ── Navigation ────────────────────────────────────────────────────────────
 
@@ -144,6 +166,32 @@ class HumanAgent(BaseHumanAgent):
 
     def _next_step_to_nearest_floor_frontier(self) -> tuple[int, int] | None:
         return self._bfs_next_step(self._is_floor_frontier)
+
+    def _select_objective(self) -> tuple[int, int] | None:
+        if self._known_missions:
+            return min(
+                self._known_missions,
+                key=lambda pos: abs(pos[0] - self.pos[0]) + abs(pos[1] - self.pos[1]),
+            )
+        if self._exit_unlocked():
+            return self._known_exit
+        return None
+
+    def _exit_unlocked(self) -> bool:
+        if self.mission_manager is None:
+            return True
+        return self.mission_manager.exit_unlocked()
+
+    def _advance_current_mission(self) -> None:
+        if self._current_objective is None:
+            return
+        if self.mission_manager is not None:
+            completed = self.mission_manager.update(self._current_objective)
+        else:
+            completed = True
+        if completed:
+            self._completed_missions.add(self._current_objective)
+            self._known_missions.discard(self._current_objective)
 
     def _adjacent_unknown_step(self) -> tuple[int, int] | None:
         y, x = self.pos

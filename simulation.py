@@ -55,6 +55,7 @@ class SimulationFrame:
     step: int
     outcome: str | None
     agents: list[AgentFrame]
+    exit_unlocked: bool = True
     noise_ripple_pos: tuple[int, int] | None = None
     radar_threat: str | None = None
     alien_heard_pos: tuple[int, int] | None = None  # (y, x) where alien heard a sound
@@ -77,13 +78,46 @@ class GenericKnowledge:
         self.known_map = np.full(self.grid_shape, UNKNOWN_TILE, dtype=np.int16)
 
     def update_from_observation(self, observation: np.ndarray):
-        # Only store valid tile IDs (0–6). Marker values like RADAR_PING (-3)
+        # Only store valid tile IDs (0–7). Marker values like RADAR_PING (-3)
         # must not be written here — they'd render as out-of-range colormap indices.
         visible_mask = observation >= 0
         self.known_map[visible_mask] = observation[visible_mask]
 
     def get_copy(self) -> np.ndarray:
         return self.known_map.copy()
+
+
+@dataclass
+class Mission:
+    tile_pos: tuple[int, int]
+    steps_remaining: int
+
+    def decrement(self):
+        if self.steps_remaining > 0:
+            self.steps_remaining -= 1
+
+class MissionManager:
+    def __init__(self, missions: list[Mission]):
+        self.missions: dict[tuple[int, int], Mission] = {
+            mission.tile_pos: mission for mission in missions
+        }
+
+    def update(self, human_pos: tuple[int, int]):
+        curr_mission_done = False
+        mission = self.missions.get(human_pos)
+        if mission is None:
+            return False
+        mission.decrement()
+        if mission.steps_remaining <= 0:
+            self.missions.pop(human_pos, None)
+            return True
+        return False
+    
+    def active_missions(self) -> list[Mission]:
+        return list(self.missions.values())
+    
+    def exit_unlocked(self) -> bool:
+        return len(self.missions) == 0
 
 
 class GenericMapSimulation:
@@ -103,6 +137,7 @@ class GenericMapSimulation:
         "#2980b9",  # PLAYER_START
         "#c0392b",  # ALIEN_START
         "#f39c12",  # EXIT
+        "#1abc9c",  # MISSION
     ]
     KNOWLEDGE_COLORS = [
         "#1a1a2e",  # WALL
@@ -112,6 +147,7 @@ class GenericMapSimulation:
         "#2980b9",  # PLAYER_START
         "#c0392b",  # ALIEN_START
         "#f39c12",  # EXIT
+        "#1abc9c",  # MISSION
         "#1d1f26",  # UNKNOWN
     ]
 
@@ -130,6 +166,8 @@ class GenericMapSimulation:
         noise_radius: int = 2,
         radar_interval: int = 5,
         seed: int = 0,
+        mission_steps: int | None = 3,
+        mission_manager: MissionManager | None = None,
     ):
         self.grid = grid
         self.agents = list(agents)
@@ -149,6 +187,18 @@ class GenericMapSimulation:
         self.last_radar_dist: int | None = None
         self.last_noise_ripple: tuple[int, int] | None = None
         self.noise_ripple_age = 0
+
+        self.mission_manager = mission_manager
+        if self.mission_manager is None and mission_steps is not None and mission_steps > 0:
+            mission_positions = self._mission_positions()
+            if mission_positions:
+                self.mission_manager = MissionManager(
+                    [Mission(position, mission_steps) for position in mission_positions]
+                )
+        if self.mission_manager is not None:
+            for spec in self.agents:
+                if spec.role == "human":
+                    setattr(spec.agent, "mission_manager", self.mission_manager)
 
         if self.knowledge_mode == "on":
             self.knowledge: Dict[str, GenericKnowledge] = {
@@ -358,6 +408,10 @@ class GenericMapSimulation:
         y, x = matches[0]
         return int(y), int(x)
 
+    def _mission_positions(self) -> list[tuple[int, int]]:
+        matches = np.argwhere(self.grid == int(Tile.MISSION))
+        return [(int(y), int(x)) for y, x in matches]
+
     def _has_collision(self, agents: list[AgentFrame]) -> bool:
         humans = [a.position for a in agents if a.role == "human"]
         aliens = [a.position for a in agents if a.role == "alien"]
@@ -372,11 +426,13 @@ class GenericMapSimulation:
         for step in range(max_steps + 1):
             current_agents = self._snapshot_agents()
             outcome = None
+            exit_unlocked = self.mission_manager.exit_unlocked() if self.mission_manager else True
             if exit_pos is not None:
-                for agent in current_agents:
-                    if agent.role == "human" and agent.position == exit_pos:
-                        outcome = f"human_reached_exit:{agent.label}"
-                        break
+                if exit_unlocked:
+                    for agent in current_agents:
+                        if agent.role == "human" and agent.position == exit_pos:
+                            outcome = f"human_reached_exit:{agent.label}"
+                            break
             if outcome is None and self._has_collision(current_agents):
                 outcome = "alien_caught_human"
 
@@ -391,6 +447,7 @@ class GenericMapSimulation:
                 step=step,
                 outcome=outcome,
                 agents=current_agents,
+                exit_unlocked=exit_unlocked,
                 noise_ripple_pos=self.last_noise_ripple if self.enable_mechanics else None,
                 radar_threat=self.last_radar_threat if self.enable_mechanics else None,
                 alien_heard_pos=alien_heard,
@@ -480,14 +537,14 @@ class GenericMapSimulation:
     ):
         world_cmap = ListedColormap(self.WORLD_COLORS)
         knowledge_cmap = ListedColormap(self.KNOWLEDGE_COLORS)
-        unknown_value = 7
+        unknown_value = 8
 
         has_single_pair = len(frames[0].agents) == 2 and {a.role for a in frames[0].agents} == {"human", "alien"}
 
         if world_only or self.knowledge_mode == "off":
             fig, ax = plt.subplots(1, 1, figsize=(8, 6), dpi=120)
             fig.patch.set_facecolor("#000000")
-            ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=6)
+            ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=7)
             ax.autoscale(False)  # prevent large Circle patches from shrinking the map
             ax.set_title("Game World", color="white", fontsize=13, fontweight="bold")
             ax.set_xticks([])
@@ -510,9 +567,10 @@ class GenericMapSimulation:
                     )
 
             exit_pos = self._exit_position()
+            exit_marker = None
             if exit_pos is not None:
                 ey, ex = exit_pos
-                ax.scatter([ex], [ey], s=100, c="#f39c12", marker="*", zorder=6)
+                exit_marker = ax.scatter([ex], [ey], s=100, c="#f39c12", marker="*", zorder=6)
 
             # Radar threat rings — one concentric outline ring per threat band,
             # always faintly visible; the active band is highlighted.
@@ -592,16 +650,27 @@ class GenericMapSimulation:
                 else:
                     alien_heard_marker.set_visible(False)
 
+                if exit_marker is not None:
+                    exit_color = "#f39c12" if state.exit_unlocked else "#7f8c8d"
+                    exit_alpha = 1.0 if state.exit_unlocked else 0.55
+                    exit_marker.set_color(exit_color)
+                    exit_marker.set_alpha(exit_alpha)
+
                 human_mode = next((a.mode for a in state.agents if a.role == "human"), "")
                 alien_mode = next((a.mode for a in state.agents if a.role == "alien"), "")
+                exit_state = "UNLOCKED" if state.exit_unlocked else "LOCKED"
                 status_text.set_text(
                     f"Step {state.step:4d}/{len(frames)-1:4d}"
                     f"  |  Human: {human_mode:<10}"
                     f"  Alien: {alien_mode:<11}"
+                    f"  Exit: {exit_state:<9}"
                     f"  |  {outcome}"
                 )
-                return [*marker_artists, *hidden_rings, *threat_rings, *ripple_circles,
-                        alien_heard_marker, status_text]
+                artists = [*marker_artists, *hidden_rings, *threat_rings, *ripple_circles,
+                           alien_heard_marker, status_text]
+                if exit_marker is not None:
+                    artists.append(exit_marker)
+                return artists
 
             animation = FuncAnimation(fig, update_world, frames=len(frames),
                                       interval=max(1, int(1000 / max(1, fps))), blit=False, repeat=False)
@@ -623,7 +692,7 @@ class GenericMapSimulation:
             axes = [axes]
 
         world_ax = axes[0]
-        world_ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=6)
+        world_ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=7)
         world_ax.autoscale(False)  # prevent large Circle patches from shrinking the map
         world_ax.set_title("World", color="white", fontsize=12, fontweight="bold")
         world_ax.set_xticks([])
@@ -631,9 +700,10 @@ class GenericMapSimulation:
         world_ax.set_facecolor("#0f0f1e")
 
         exit_pos = self._exit_position()
+        exit_marker = None
         if exit_pos is not None:
             ey, ex = exit_pos
-            world_ax.scatter([ex], [ey], s=100, c="#f39c12", marker="*", zorder=6)
+            exit_marker = world_ax.scatter([ex], [ey], s=100, c="#f39c12", marker="*", zorder=6)
 
         color_map = self._role_colors()
         world_markers = []
@@ -666,7 +736,7 @@ class GenericMapSimulation:
                 initial = np.full(self.grid.shape, unknown_value, dtype=np.int16)
             else:
                 initial = np.where(agent.knowledge_map < 0, unknown_value, agent.knowledge_map)
-            image = axis.imshow(initial, cmap=knowledge_cmap, vmin=0, vmax=7)
+            image = axis.imshow(initial, cmap=knowledge_cmap, vmin=0, vmax=8)
             knowledge_images.append(image)
             y, x = agent.position
             marker_style = "X" if agent.role == "alien" else "o"
@@ -794,18 +864,29 @@ class GenericMapSimulation:
                 else:
                     m.set_visible(False)
 
+            if exit_marker is not None:
+                exit_color = "#f39c12" if state.exit_unlocked else "#7f8c8d"
+                exit_alpha = 1.0 if state.exit_unlocked else 0.55
+                exit_marker.set_color(exit_color)
+                exit_marker.set_alpha(exit_alpha)
+
             human_mode = next((a.mode for a in state.agents if a.role == "human"), "")
             alien_mode = next((a.mode for a in state.agents if a.role == "alien"), "")
+            exit_state = "UNLOCKED" if state.exit_unlocked else "LOCKED"
             status_text.set_text(
                 f"Step {state.step:4d}/{len(frames)-1:4d}"
                 f"  |  Human: {human_mode:<10}"
                 f"  Alien: {alien_mode:<11}"
+                f"  Exit: {exit_state:<9}"
                 f"  |  {outcome}"
             )
             fov_imgs = [img for img, _ in fov_overlays]
-            return [*world_markers, *hidden_rings, *threat_rings, *ripple_circles,
-                    *alien_heard_markers, *knowledge_images, *knowledge_markers,
-                    *fov_imgs, *opp_markers, status_text]
+            artists = [*world_markers, *hidden_rings, *threat_rings, *ripple_circles,
+                       *alien_heard_markers, *knowledge_images, *knowledge_markers,
+                       *fov_imgs, *opp_markers, status_text]
+            if exit_marker is not None:
+                artists.append(exit_marker)
+            return artists
 
         animation = FuncAnimation(fig, update_full, frames=len(frames),
                                   interval=max(1, int(1000 / max(1, fps))), blit=False, repeat=False)
