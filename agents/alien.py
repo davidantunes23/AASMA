@@ -23,9 +23,9 @@ EXIT = 6
 UNKNOWN = -1
 PLAYER_SEEN = -2
 
-PASSABLE_ALIEN = {FLOOR, VENT, PLAYER_START, ALIEN_START, EXIT}
-PASSABLE_ALIEN_RUSH = {FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT}  # used when entering a confirmed hiding spot
-PASSABLE_PLAYER = {FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT}
+PASSABLE_ALIEN = {FLOOR, VENT, PLAYER_START, ALIEN_START, EXIT, 7}
+PASSABLE_ALIEN_RUSH = {FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT, 7}  # used when entering a confirmed hiding spot
+PASSABLE_PLAYER = {FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT, 7}
 
 # Cardinal directions as (dy, dx) applied to (y, x) — right, left, down, up
 DIRS = [(0, 1), (0, -1), (1, 0), (-1, 0)]

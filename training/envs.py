@@ -12,6 +12,7 @@ ACTION_MEANING = {
     2: ("WALK", Direction.EAST),
     3: ("WALK", Direction.SOUTH),
     4: ("WALK", Direction.WEST),
+    5: ("LOUD_NOISE", None),
 }
 
 # Walk actions (exclude WAIT)
@@ -40,8 +41,8 @@ class BaseAETEnv(gym.Env):
         self.step_count = 0
         self._rng = np.random.default_rng()
 
-        # Discrete 5 actions
-        self.action_space = spaces.Discrete(5)
+        # Discrete 6 actions (WAIT + 4 walks + LOUD_NOISE)
+        self.action_space = spaces.Discrete(6)
 
         # Observation vector padded to 128 floats
         self.observation_space = spaces.Box(low=-10.0, high=10.0, shape=(128,), dtype=np.float32)
@@ -62,7 +63,7 @@ class BaseAETEnv(gym.Env):
         self._episode_total_reward = 0.0
 
         # Action / exploration debug tracking (human only)
-        self._action_counts = [0, 0, 0, 0, 0]  # WAIT, N, E, S, W
+        self._action_counts = [0, 0, 0, 0, 0, 0]  # WAIT, N, E, S, W, LOUD_NOISE
         self._first_actions: list = []
         self._last_known_map_mean = 0.0
         self._total_stuck_steps = 0  # steps where position didn't change (regardless of action)
@@ -97,6 +98,8 @@ class BaseAETEnv(gym.Env):
         act_name, dirv = ACTION_MEANING[int(action)]
         if act_name == "WAIT":
             return (HumanAction.WAIT, self.human_agent.direction)
+        if act_name == "LOUD_NOISE":
+            return (HumanAction.LOUD_NOISE, self.human_agent.direction)
         return (HumanAction.WALK, dirv)
 
     def _action_to_alien_step(self, action: int):
@@ -393,8 +396,8 @@ class BaseAETEnv(gym.Env):
             "reward_components": {k: round(v, 3) for k, v in self._reward_log.items()},
         }
         if self.role == "human":
-            names = ["WAIT", "N", "E", "S", "W"]
-            summary["action_dist"] = {names[i]: self._action_counts[i] for i in range(5)}
+            names = ["WAIT", "N", "E", "S", "W", "LOUD_NOISE"]
+            summary["action_dist"] = {names[i]: self._action_counts[i] for i in range(6)}
             summary["first_20_actions"] = [names[a] for a in self._first_actions]
             # stuck_frac = steps where position didn't change (wall-pressing counts here even without WAIT)
             summary["stuck_frac"] = round(self._total_stuck_steps / max(self.step_count, 1), 3)

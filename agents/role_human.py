@@ -1,23 +1,14 @@
 from collections import deque
 
 import numpy as np
-from enum import Enum
 
-from agents.base import BaseHumanAgent, Direction
-
-
-class Action(Enum):
-    WAIT = 0
-    WALK = 1
-    LOUD_NOISE = 2
+from agents.base import BaseHumanAgent, Direction, TeamRole
 from map_generator import Tile
 
 
-class HumanAgent(BaseHumanAgent):
-    """Rule-based human agent. Uses BFS navigation, radar-reactive hiding.
-
-    All positions are (y, x) / (row, col). The simulation calls observe()
-    once per step before step() so the agent can update its internal map.
+class RoleHumanAgent(BaseHumanAgent):
+    """Role-aware human agent. Behaves like `HumanAgent` but exposes
+    `team_role` and respects masking operators (e.g., WORKER disables hiding).
     """
 
     UNKNOWN = -1
@@ -31,11 +22,16 @@ class HumanAgent(BaseHumanAgent):
         self.view_length = view_length
         self.hidden: bool = False
         self.exit_open: bool = False
+        self.team_role: TeamRole | None = TeamRole.NONE
         self.last_radar_threat: str | None = None
         self.last_radar_dist: int | None = None
         self._known_map: np.ndarray | None = None
         self._known_exit: tuple[int, int] | None = None
         self._observed_aliens: set[tuple[int, int]] = set()
+        # Decoy / loud-noise state (no cooldown — can make noise whenever threatened)
+        self.made_loud_noise: bool = False
+        # External missions list (set by role manager or simulation)
+        self.mission_positions: list[tuple[int, int]] = []
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -67,6 +63,13 @@ class HumanAgent(BaseHumanAgent):
                 self.hidden = False
             else:
                 return self.pos
+
+        # Role-specific override: DECOY behavior
+        if self.team_role == TeamRole.DECOY:
+            return self._decoy_step()
+
+        if self.team_role == TeamRole.RUNNER:
+            return self._runner_step()
 
         # PRIORITY 2: Run to exit once known
         if self.exit_open and self._known_exit is not None:
@@ -255,13 +258,16 @@ class HumanAgent(BaseHumanAgent):
                 frontier.append(neighbor)
         return None
 
-    # ── Decision helpers ──────────────────────────────────────────────────────
+    # ── Decision helpers ─────────────────────────────────────────────────────
 
     def _should_keep_hiding(self) -> bool:
         return self.last_radar_threat in {"CRITICAL", "CLOSE"}
 
     def _should_hide_now(self) -> bool:
         if self.last_radar_threat is None:
+            return False
+        # WORKER role disables hiding behavior (masking operator)
+        if self.team_role == TeamRole.WORKER:
             return False
         if self.last_radar_threat == "CRITICAL":
             return True
@@ -315,6 +321,112 @@ class HumanAgent(BaseHumanAgent):
         if tile == int(Tile.EXIT) and not self.exit_open:
             return False
         return tile not in (self.UNKNOWN, self.ALIEN, int(Tile.WALL))
+
+    # ── DECOY helpers ───────────────────────────────────────────────────────
+
+    def _decoy_step(self) -> tuple[int, int]:
+        # If the decoy itself is threatened, try to hide (but do not emit loud noise here).
+        if self.last_radar_threat in {"CRITICAL", "CLOSE"}:
+            spot = self._get_closest_hiding_spot()
+            if spot is not None:
+                nxt = self._step_toward_target(spot)
+                if nxt is not None and nxt != self.pos:
+                    self.direction = self._direction_from_step(self.pos, nxt)
+                    self.pos = nxt
+                    self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                    return self.pos
+            return self.pos
+
+        # Otherwise, reposition far from missions
+        far_tile = self._farthest_from_missions()
+        if far_tile is not None:
+            nxt = self._step_toward_target(far_tile)
+            if nxt is not None and nxt != self.pos:
+                self.direction = self._direction_from_step(self.pos, nxt)
+                self.pos = nxt
+                self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                return self.pos
+
+        # Fallback: explore using the same heuristics as a normal human
+        nxt = self._adjacent_unknown_step()
+        if nxt is None:
+            nxt = self._next_step_to_nearest_floor_frontier()
+        if nxt is None:
+            nxt = self._next_step_to_nearest_frontier()
+        if nxt is None:
+            nxt = self._best_local_move()
+
+        if self._is_observed_alien(nxt):
+            nxt = None
+
+        if nxt is not None and nxt != self.pos:
+            self.direction = self._direction_from_step(self.pos, nxt)
+            self.pos = nxt
+
+        self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+        return self.pos
+
+    def _farthest_from_missions(self) -> tuple[int, int] | None:
+        if not self.mission_positions or self._known_map is None:
+            return None
+        H, W = self._known_map.shape
+        best = None
+        best_score = -1
+        for y in range(H):
+            for x in range(W):
+                if not self._is_traversable_known((y, x)):
+                    continue
+                # min distance to any mission
+                min_d = min(abs(y - my) + abs(x - mx) for my, mx in self.mission_positions)
+                if min_d > best_score:
+                    best_score = min_d
+                    best = (y, x)
+        return best
+
+    # ── RUNNER helpers ──────────────────────────────────────────────────────
+
+    def _runner_step(self) -> tuple[int, int]:
+        # Runner avoids loud noise and focuses on exit/escape
+        # If exit is known
+        if self.exit_open and self._known_exit is not None:
+            # If alien is far enough (FAR) or no radar info -> head to exit
+            if self.last_radar_threat is None or self.last_radar_threat == "FAR":
+                nxt = self._step_toward_target(self._known_exit)
+                if nxt is not None and nxt != self.pos:
+                    self.direction = self._direction_from_step(self.pos, nxt)
+                    self.pos = nxt
+                    self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                    return self.pos
+                # at exit or cannot move: wait
+                return self.pos
+
+            # Otherwise (threat is NEAR/CLOSE/CRITICAL): hide and wait
+            if self.hidden:
+                if self._should_keep_hiding():
+                    return self.pos
+                else:
+                    self.hidden = False
+
+            spot = self._get_closest_hiding_spot()
+            if spot is not None:
+                nxt = self._step_toward_target(spot)
+                if nxt is not None and nxt != self.pos:
+                    self.direction = self._direction_from_step(self.pos, nxt)
+                    self.pos = nxt
+                    self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                    return self.pos
+            # no hiding spot known: stay put
+            return self.pos
+
+        # No exit visible: move toward last known exit area if available, else explore
+        nxt = self._next_step_to_nearest_frontier()
+        if nxt is None:
+            nxt = self._best_local_move()
+        if nxt is not None and nxt != self.pos:
+            self.direction = self._direction_from_step(self.pos, nxt)
+            self.pos = nxt
+        self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+        return self.pos
 
     def _is_observed_alien(self, position: tuple[int, int] | None) -> bool:
         if position is None:

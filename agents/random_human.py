@@ -19,18 +19,24 @@ class RandomHumanAgent(BaseHumanAgent):
     rng: random.Random = field(default_factory=random.Random, repr=False)
     direction: Direction = field(default=Direction.NORTH, init=False)
     hidden: bool = field(default=False, init=False)
+    exit_open: bool = field(default=False, init=False)
 
     def reset(self, start_pos: Optional[tuple] = None):
         if start_pos is not None:
             self.pos = start_pos
 
     def step(self, _player_pos: tuple, _heard_pos: tuple = None, _step_num: int = 0) -> tuple:
+        if self.exit_open and self.grid[self.pos] == 6:
+            return self.pos
+
         y, x = self.pos
         height, width = self.grid.shape
         neighbours = []
         for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
             ny, nx = y + dy, x + dx
             if 0 <= ny < height and 0 <= nx < width and self.grid[ny, nx] in PASSABLE_HUMAN:
+                if self.grid[ny, nx] == 6 and not self.exit_open:
+                    continue
                 neighbours.append((ny, nx))
 
         old_pos = self.pos

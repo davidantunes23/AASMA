@@ -10,6 +10,7 @@ Tile legend:
     4 PLAYER_START  player spawn
     5 ALIEN_START   alien spawn
     6 EXIT          player goal
+    7 MISSION       mission target tile
 
 Alpha parameter  alpha in [-1, +1]:
     alpha < 0  -> player-favoured  (more hiding spots per room, fewer vents)
@@ -39,6 +40,7 @@ class Tile(IntEnum):
     PLAYER_START = 4
     ALIEN_START = 5
     EXIT = 6
+    MISSION = 7
 
 
 TILE_CHAR = {
@@ -49,6 +51,7 @@ TILE_CHAR = {
     Tile.PLAYER_START: "PP",
     Tile.ALIEN_START: "AA",
     Tile.EXIT: "EE",
+    Tile.MISSION: "MM",
 }
 
 TILE_NAME = {
@@ -59,6 +62,7 @@ TILE_NAME = {
     Tile.PLAYER_START: "player",
     Tile.ALIEN_START: "alien",
     Tile.EXIT: "exit",
+    Tile.MISSION: "mission",
 }
 
 

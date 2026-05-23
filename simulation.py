@@ -11,7 +11,12 @@ import numpy as np
 from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.colors import ListedColormap
 
-from agents.base import Direction, cone_fov
+from agents.base import Direction, cone_fov, TeamRole
+from agents.role_manager import (
+    assign_worker_greedy,
+    assign_decoy_farthest,
+    assign_runner_greedy,
+)
 from map_generator import Tile
 
 KnowledgeMode = Literal["off", "on"]
@@ -44,6 +49,7 @@ class AgentFrame:
     role: AgentRole
     position: tuple[int, int]
     hidden: bool = False
+    team_role: Optional[TeamRole] = None
     knowledge_map: Optional[np.ndarray] = None
     mode: str = ""  # human: EXPLORING/FLEEING/HIDING; alien: SEARCH/INVESTIGATE/HUNT
     fov: frozenset = field(default_factory=frozenset)         # (y,x) cells visible this step
@@ -103,6 +109,7 @@ class GenericMapSimulation:
         "#2980b9",  # PLAYER_START
         "#c0392b",  # ALIEN_START
         "#f39c12",  # EXIT
+        "#f1c40f",  # MISSION
     ]
     KNOWLEDGE_COLORS = [
         "#1a1a2e",  # WALL
@@ -112,6 +119,7 @@ class GenericMapSimulation:
         "#2980b9",  # PLAYER_START
         "#c0392b",  # ALIEN_START
         "#f39c12",  # EXIT
+        "#f1c40f",  # MISSION
         "#1d1f26",  # UNKNOWN
     ]
 
@@ -141,6 +149,19 @@ class GenericMapSimulation:
         self.noise_radius = noise_radius
         self.radar_interval = radar_interval
         self._rng = np.random.default_rng(seed)  # seeded RNG — no global state pollution
+
+        # Role / mission bookkeeping for dynamic reassignment
+        self.known_missions: set[tuple[int, int]] = set()
+        self.pending_missions: set[tuple[int, int]] = set()
+        # periodic reassignment removed — use event-driven reassignment only
+        self.reassign_interval: int | None = None
+        # Role-based configuration toggle: when False, the simulation will not
+        # perform automatic role reassignment; roles may still be set manually
+        # via `set_initial_roles` or `allocate_roles_by_counts`.
+        self.role_based: bool = True
+        # Mission tile values to auto-detect (set of integer tile ids).
+        # If empty, automatic mission detection is disabled. Example: {7}
+        self.mission_tile_values: set[int] = set()
 
         # Radar state (used when enable_mechanics=True)
         self.steps_since_radar = 0
@@ -294,6 +315,172 @@ class GenericMapSimulation:
             observation = self._partial_observation(position, radius)
         self.knowledge[label].update_from_observation(observation)
 
+    # ── Mission / role reassignment helpers ─────────────────────────────────
+
+    def add_mission(self, position: tuple[int, int]) -> None:
+        """Register a newly discovered mission and trigger immediate reassignment."""
+        if position not in self.known_missions:
+            self.known_missions.add(position)
+            self.pending_missions.add(position)
+            self._maybe_reassign_roles(new_mission=True)
+
+    def complete_mission(self, position: tuple[int, int]) -> None:
+        """Mark a mission complete and trigger reassignment."""
+        self.known_missions.discard(position)
+        self.pending_missions.discard(position)
+        self._maybe_reassign_roles(mission_completed=True)
+
+    def _locked_worker_labels(self) -> set[str]:
+        """Return labels for WORKERs that should not be reassigned.
+
+        A worker is considered locked if: it currently has `team_role==WORKER` and
+        either is located on a mission tile or exposes `mission_progress > 0`.
+        """
+        locked: set[str] = set()
+        for s in self.agents:
+            if s.role != "human":
+                continue
+            agent = getattr(s, "agent", None)
+            if agent is None:
+                continue
+            if getattr(agent, "team_role", None) == TeamRole.WORKER:
+                # Check mission progress attribute if present
+                progress = getattr(agent, "mission_progress", 0)
+                pos = self._get_position(s)
+                on_mission_tile = pos in self.known_missions
+                if progress > 0 or on_mission_tile:
+                    locked.add(getattr(s, "label", ""))
+        return locked
+
+    def _maybe_reassign_roles(self, new_mission: bool = False, mission_completed: bool = False, worker_died: bool = False, exit_opened: bool = False) -> None:
+        """Reassign roles according to policy.
+
+        Only reassign among free agents (not locked). If no free agents, keep roles and queue missions.
+        This function is event-driven: it should be called on mission discovery/completion
+        or other major events. Periodic reassignment has been disabled.
+        """
+        # Respect role-based toggle
+        if not self.role_based:
+            return
+
+        # If there are no pending missions and no explicit trigger, skip
+        if not self.pending_missions and not (new_mission or mission_completed or worker_died or exit_opened):
+            return
+
+        locked = self._locked_worker_labels()
+        human_specs = [s for s in self.agents if s.role == "human"]
+        free_specs = [s for s in human_specs if getattr(s, "label", "") not in locked]
+
+        if not free_specs:
+            # nothing to reassign now — keep pending missions in queue
+            return
+
+        # Assign workers among free agents only
+        # Convert pending_missions to list for role manager
+        missions = list(self.pending_missions) if self.pending_missions else list(self.known_missions)
+        if not missions:
+            return
+
+        # First, attempt to promote a worker among free agents
+        worker_label = assign_worker_greedy(free_specs, missions)
+        # If successful, remove that mission from pending (we assume one worker will claim nearest mission)
+        if worker_label is not None:
+            # find that agent and approximate their targeted mission as the closest mission
+            promoted = next((s for s in free_specs if getattr(s, "label", None) == worker_label), None)
+            if promoted is not None:
+                pos = getattr(promoted.agent, "pos", None)
+                if pos is not None:
+                    # remove the nearest mission from pending to avoid double-assign
+                    nearest = self._nearest_target(pos, missions)
+                    if nearest is not None and nearest in self.pending_missions:
+                        self.pending_missions.discard(nearest)
+
+        # Next, assign a DECOY among remaining free agents (excluding newly promoted worker)
+        remaining_free = [s for s in free_specs if getattr(s.agent, "team_role", None) != TeamRole.WORKER]
+        decoy_label = assign_decoy_farthest(remaining_free, missions)
+
+        # Finally, pick a RUNNER for exit behavior among remaining free agents
+        exit_pos = self._exit_position()
+        remaining_free_after = [s for s in remaining_free if getattr(s.agent, "team_role", None) not in (TeamRole.WORKER, TeamRole.DECOY)]
+        runner_label = assign_runner_greedy(remaining_free_after, exit_pos, None)
+
+    # ── Role configuration API ──────────────────────────────────────────────
+    def enable_role_based(self, enabled: bool) -> None:
+        """Enable or disable automatic role reassignment."""
+        self.role_based = bool(enabled)
+
+    def set_initial_roles(self, role_map: dict[str, str | TeamRole]) -> None:
+        """Set explicit roles for agents by label.
+
+        `role_map` maps agent label -> role name (e.g. 'WORKER', 'DECOY', 'RUNNER')
+        or a `TeamRole` value. Only human agents are affected.
+        """
+        for spec in self.agents:
+            if spec.role != "human":
+                continue
+            label = getattr(spec, "label", None)
+            if label in role_map:
+                val = role_map[label]
+                if isinstance(val, TeamRole):
+                    setattr(spec.agent, "team_role", val)
+                else:
+                    try:
+                        tr = TeamRole[val]
+                        setattr(spec.agent, "team_role", tr)
+                    except Exception:
+                        # ignore invalid names
+                        pass
+
+    def allocate_roles_by_counts(self, counts: dict[str, int]) -> None:
+        """Allocate roles among human agents by counts.
+
+        `counts` keys can be 'WORKER', 'DECOY', 'RUNNER' (case-sensitive).
+        Assignment is greedy: it assigns roles to available human agents in
+        the order they appear in `self.agents` until counts are satisfied.
+        This is a deterministic, user-controlled allocation useful for
+        experiments where you fix the team composition.
+        """
+        # Clear previous roles for humans
+        human_specs = [s for s in self.agents if s.role == "human"]
+        for s in human_specs:
+            try:
+                setattr(s.agent, "team_role", TeamRole.NONE)
+            except Exception:
+                pass
+
+        # Use greedy role_manager to pick best agents for each role count
+        remaining = list(human_specs)
+        missions = list(self.known_missions) if self.known_missions else []
+        exit_pos = self._exit_position()
+
+        # assign WORKERs greedily
+        for _ in range(counts.get("WORKER", 0)):
+            if not remaining:
+                break
+            chosen_label = assign_worker_greedy(remaining, missions)
+            if not chosen_label:
+                break
+            # remove chosen from remaining
+            remaining = [s for s in remaining if getattr(s, "label", None) != chosen_label]
+
+        # assign DECOYs greedily
+        for _ in range(counts.get("DECOY", 0)):
+            if not remaining:
+                break
+            chosen_label = assign_decoy_farthest(remaining, missions)
+            if not chosen_label:
+                break
+            remaining = [s for s in remaining if getattr(s, "label", None) != chosen_label]
+
+        # assign RUNNERs greedily
+        for _ in range(counts.get("RUNNER", 0)):
+            if not remaining:
+                break
+            chosen_label = assign_runner_greedy(remaining, exit_pos, None)
+            if not chosen_label:
+                break
+            remaining = [s for s in remaining if getattr(s, "label", None) != chosen_label]
+
     def _is_hidden_position(self, position: tuple[int, int]) -> bool:
         return self._in_bounds(self.grid, position) and self.grid[position] == int(Tile.HIDE)
 
@@ -341,7 +528,8 @@ class GenericMapSimulation:
                         break
 
             snapshot.append(AgentFrame(label=spec.label, role=spec.role, position=position,
-                                       hidden=hidden, knowledge_map=knowledge_map, mode=mode,
+                                       hidden=hidden, team_role=getattr(spec.agent, "team_role", None),
+                                       knowledge_map=knowledge_map, mode=mode,
                                        fov=fov, visible_opponent=visible_opponent))
         return snapshot
 
@@ -363,22 +551,72 @@ class GenericMapSimulation:
         aliens = [a.position for a in agents if a.role == "alien"]
         return any(h == al for h in humans for al in aliens)
 
+    def _missions_remaining(self) -> int:
+        if not self.mission_tile_values:
+            return 0
+        count = 0
+        for mv in self.mission_tile_values:
+            count += int(np.count_nonzero(self.grid == int(mv)))
+        return count
+
+    def _update_exit_open_state(self) -> bool:
+        exit_open = self._missions_remaining() == 0
+        for spec in self.agents:
+            if spec.role == "human":
+                try:
+                    setattr(spec.agent, "exit_open", exit_open)
+                except Exception:
+                    pass
+        return exit_open
+
+    def _complete_mission_at(self, position: tuple[int, int]) -> bool:
+        if not self.mission_tile_values:
+            return False
+        if self.grid[position] not in {int(v) for v in self.mission_tile_values}:
+            return False
+        self.grid[position] = int(Tile.FLOOR)
+        self.known_missions.discard(position)
+        self.pending_missions.discard(position)
+        self._maybe_reassign_roles(mission_completed=True)
+        return True
+
+    def _captured_human_labels(self, agents: list[AgentFrame], captured_labels: set[str]) -> set[str]:
+        alien_positions = {a.position for a in agents if a.role == "alien"}
+        if not alien_positions:
+            return set()
+        newly_captured = set()
+        for a in agents:
+            if a.role != "human" or a.label in captured_labels:
+                continue
+            if a.position in alien_positions:
+                newly_captured.add(a.label)
+        return newly_captured
+
     # ── Run ───────────────────────────────────────────────────────────────────
 
     def run(self, max_steps: int = 200) -> tuple[list[SimulationFrame], str]:
         frames: list[SimulationFrame] = []
         exit_pos = self._exit_position()
+        captured_humans: set[str] = set()
+        all_human_labels = [s.label for s in self.agents if s.role == "human"]
+
+        def all_captured() -> bool:
+            return bool(all_human_labels) and len(captured_humans) >= len(all_human_labels)
 
         for step in range(max_steps + 1):
+            exit_open = self._update_exit_open_state()
             current_agents = self._snapshot_agents()
             outcome = None
-            if exit_pos is not None:
-                for agent in current_agents:
-                    if agent.role == "human" and agent.position == exit_pos:
-                        outcome = f"human_reached_exit:{agent.label}"
-                        break
-            if outcome is None and self._has_collision(current_agents):
-                outcome = "alien_caught_human"
+            if exit_open and exit_pos is not None:
+                humans = [a for a in current_agents if a.role == "human"]
+                if humans and all(a.position == exit_pos for a in humans):
+                    outcome = "human_reached_exit_all"
+            if outcome is None:
+                captured_humans.update(self._captured_human_labels(current_agents, captured_humans))
+                if all_captured():
+                    outcome = "alien_caught_all_humans" if len(all_human_labels) > 1 else "alien_caught_human"
+                elif len(all_human_labels) == 1 and self._has_collision(current_agents):
+                    outcome = "alien_caught_human"
 
             alien_heard = None
             if self.enable_mechanics:
@@ -400,7 +638,7 @@ class GenericMapSimulation:
 
             # Update radar before agents act so humans can react to current threat level
             if self.enable_mechanics:
-                human_specs = [s for s in self.agents if s.role == "human"]
+                human_specs = [s for s in self.agents if s.role == "human" and s.label not in captured_humans]
                 alien_specs = [s for s in self.agents if s.role == "alien"]
                 if human_specs and alien_specs:
                     self._update_radar(
@@ -408,62 +646,209 @@ class GenericMapSimulation:
                         self._get_position(alien_specs[0]),
                     )
 
+            # First pass: build observations and call observe() for all agents
+            current_positions = {s.label: self._get_position(s) for s in self.agents}
+            # Call observe/update knowledge
             for spec in self.agents:
-                current_position = self._get_position(spec)
-                # Aliens always receive the actual human position — hiding is handled internally
-                # by AlienAgent.step() via player_hiding detection. Excluding the hidden human
-                # here would cause nearest_target to fall back to the alien's own position,
-                # making the alien think it sees itself as the player.
-                if spec.role == "alien":
-                    opposing_positions = [
-                        self._get_position(other)
-                        for other in self.agents
-                        if other.label != spec.label and other.role != spec.role
-                    ]
-                else:
-                    opposing_positions = [
-                        self._get_position(other)
-                        for other in self.agents
-                        if other.label != spec.label
-                        and other.role != spec.role
-                        and not (other.role == "human" and self._is_hidden_position(self._get_position(other)))
-                    ]
-                nearest_target = self._nearest_target(current_position, opposing_positions) or current_position
+                if spec.role == "human" and spec.label in captured_humans:
+                    continue
+                current_position = current_positions[spec.label]
                 radius = self._view_radius_for(spec)
                 direction = getattr(spec.agent, "direction", None)
                 self._update_knowledge(spec.label, current_position, radius, direction)
 
-                # Build observation (cone for agents with a direction, circular otherwise)
                 if self.enable_mechanics and direction is not None:
                     obs = self._cone_observation(current_position, direction, radius)
                 else:
                     obs = self._partial_observation(current_position, radius)
 
-                # Pass observation to agents that accept it (observe() is a no-op for random agents)
                 if hasattr(spec.agent, "observe"):
+                    # Automatic mission detection: if this observation contains
+                    # any of the configured mission tile values, register them.
+                    if spec.role == "human" and self.mission_tile_values:
+                        for mv in self.mission_tile_values:
+                            ys, xs = np.where(obs == mv)
+                            for y, x in zip(ys, xs):
+                                self.add_mission((int(y), int(x)))
+
                     if spec.role == "human":
+                        try:
+                            setattr(spec.agent, "exit_open", exit_open)
+                        except Exception:
+                            pass
                         spec.agent.observe(obs, self.last_radar_threat, self.last_radar_dist)
                     else:
                         spec.agent.observe(obs)
 
-                # Compute heard_pos (y, x) for alien step calls
-                if self.enable_mechanics and spec.role == "alien":
-                    human_specs = [s for s in self.agents if s.role == "human"]
-                    if human_specs:
-                        h_pos_yx = self._get_position(human_specs[0])
-                        h_hidden = bool(getattr(human_specs[0].agent, "hidden", False))
-                        heard_yx = self._generate_noise(h_pos_yx, h_hidden)
-                    else:
-                        heard_yx = nearest_target
-                else:
-                    heard_yx = nearest_target
+            # Reassign roles immediately if triggered by events (e.g. add_mission).
+            # Periodic reassignment tick removed; use event-driven reassignment only.
 
-                # Uniform step call — all agents return new (y, x) position
-                new_pos = spec.agent.step(nearest_target, heard_yx, step)
+            # Second pass: humans act first so they can set made_loud_noise etc.
+            alien_positions = [self._get_position(s) for s in self.agents if s.role == "alien"]
+            for spec in [s for s in self.agents if s.role == "human" and s.label not in captured_humans]:
+                try:
+                    setattr(spec.agent, "exit_open", self._missions_remaining() == 0)
+                except Exception:
+                    pass
+                current_position = self._get_position(spec)
+                opposing_positions = [pos for pos in alien_positions]
+                nearest_target = self._nearest_target(current_position, opposing_positions) or current_position
+                # humans generally ignore heard_pos; pass None
+                new_pos = spec.agent.step(nearest_target, None, step)
                 self._set_position(spec, (int(new_pos[0]), int(new_pos[1])))
 
-                if spec.role == "human":
-                    setattr(spec.agent, "hidden", self._is_hidden_position(self._get_position(spec)))
+                # If the human just stepped on a mission tile, complete it immediately.
+                self._complete_mission_at(self._get_position(spec))
+
+            # Mark any humans who collided with aliens after human movement.
+            post_human_agents = self._snapshot_agents()
+            captured_humans.update(self._captured_human_labels(post_human_agents, captured_humans))
+
+            # Compute heard position for aliens (consider deliberate loud noises or DECOY response to WORKER threat)
+            human_specs = [s for s in self.agents if s.role == "human" and s.label not in captured_humans]
+            loud_source = None
+            if human_specs:
+                for hs in human_specs:
+                    agent_obj = getattr(hs, "agent", None)
+                    if agent_obj is not None and not getattr(agent_obj, "hidden", False) and getattr(agent_obj, "made_loud_noise", False):
+                        loud_source = hs
+                        break
+
+                if loud_source is None:
+                    # detect threatened worker relative to each alien and let DECOY respond
+                    worker_specs = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.WORKER]
+                    if worker_specs:
+                        # choose most-threatened worker across aliens (closest to any alien)
+                        threatened_worker = None
+                        threatened_dist = None
+                        for ws in worker_specs:
+                            wpos = self._get_position(ws)
+                            # distance to nearest alien
+                            min_ad = min((self._topology_distance(wpos, ap) for ap in alien_positions), default=None)
+                            if min_ad is None:
+                                continue
+                            if threatened_dist is None or min_ad < threatened_dist:
+                                threatened_dist = min_ad
+                                threatened_worker = (ws, min_ad)
+
+                        if threatened_worker is not None:
+                            worker_dist = threatened_worker[1]
+                            worker_threat = None
+                            for threat_level, (min_d, max_d) in RADAR_BANDS.items():
+                                if min_d <= worker_dist <= max_d:
+                                    worker_threat = threat_level
+                                    break
+                            if worker_threat in {"CRITICAL", "CLOSE"}:
+                                decoy_specs = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.DECOY]
+                                if decoy_specs:
+                                    best_decoy = None
+                                    best_score = -1
+                                    worker_pos = self._get_position(threatened_worker[0])
+                                    for ds in decoy_specs:
+                                        dpos = self._get_position(ds)
+                                        pd = self._topology_distance(dpos, worker_pos)
+                                        if pd > best_score:
+                                            best_score = pd
+                                            best_decoy = ds
+                                    loud_source = best_decoy
+
+            # Now set heard_yx for aliens
+            if loud_source is not None:
+                h_pos_yx = self._get_position(loud_source)
+                heard_yx_for_aliens = h_pos_yx
+                self.last_noise_ripple = h_pos_yx
+                self.noise_ripple_age = 0
+                try:
+                    setattr(loud_source.agent, "made_loud_noise", False)
+                except Exception:
+                    pass
+            else:
+                heard_yx_for_aliens = None
+                noise_sources: list[tuple[tuple[int, int], tuple[int, int]]] = []
+                for hs in human_specs:
+                    agent_obj = getattr(hs, "agent", None)
+                    if agent_obj is None or bool(getattr(agent_obj, "hidden", False)):
+                        continue
+                    if self._rng.random() < self.p_noise:
+                        h_pos_yx = self._get_position(hs)
+                        off_y = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
+                        off_x = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
+                        ny = max(0, min(h_pos_yx[0] + off_y, self.grid.shape[0] - 1))
+                        nx = max(0, min(h_pos_yx[1] + off_x, self.grid.shape[1] - 1))
+                        noise_sources.append((h_pos_yx, (ny, nx)))
+
+                if noise_sources:
+                    idx = int(self._rng.integers(len(noise_sources)))
+                    h_pos_yx, heard_yx_for_aliens = noise_sources[idx]
+                    self.last_noise_ripple = h_pos_yx
+                    self.noise_ripple_age = 0
+                elif self.last_noise_ripple is not None:
+                    self.noise_ripple_age += 1
+                    if self.noise_ripple_age > 2:
+                        self.last_noise_ripple = None
+
+            # Third pass: aliens act using heard_yx_for_aliens and updated human positions
+            for spec in [s for s in self.agents if s.role == "alien"]:
+                current_position = self._get_position(spec)
+                opposing_positions = [
+                    self._get_position(other)
+                    for other in self.agents
+                    if other.label != spec.label
+                    and other.role != spec.role
+                    and other.label not in captured_humans
+                    and not (other.role == "human" and self._is_hidden_position(self._get_position(other)))
+                ]
+                nearest_target = self._nearest_target(current_position, opposing_positions) or current_position
+                # Pass the same heard position to all aliens (None if no humans)
+                new_pos = spec.agent.step(nearest_target, heard_yx_for_aliens, step)
+                self._set_position(spec, (int(new_pos[0]), int(new_pos[1])))
+
+            # Mark any humans who collided with aliens after alien movement.
+            post_alien_agents = self._snapshot_agents()
+            captured_humans.update(self._captured_human_labels(post_alien_agents, captured_humans))
+
+            if all_captured():
+                # Multi-agent games end only when all humans are caught.
+                # Single-agent games still end on the sole capture.
+                outcome = "alien_caught_all_humans" if len(all_human_labels) > 1 else "alien_caught_human"
+                final_agents = post_alien_agents
+                alien_heard = None
+                if self.enable_mechanics:
+                    for spec in self.agents:
+                        if spec.role == "alien":
+                            alien_heard = getattr(spec.agent, "last_heard_pos", None)
+                            break
+                frames.append(SimulationFrame(
+                    step=step + 1,
+                    outcome=outcome,
+                    agents=final_agents,
+                    noise_ripple_pos=self.last_noise_ripple if self.enable_mechanics else None,
+                    radar_threat=self.last_radar_threat if self.enable_mechanics else None,
+                    alien_heard_pos=alien_heard,
+                ))
+                return frames, outcome
+
+            # Update hidden flag for humans after movement
+            for spec in [s for s in self.agents if s.role == "human" and s.label not in captured_humans]:
+                setattr(spec.agent, "hidden", self._is_hidden_position(self._get_position(spec)))
+
+            # Refresh exit state after any mission completions during this step.
+            exit_open = self._update_exit_open_state()
+
+            # Game ends when all humans reach the exit tile, or if everyone is caught.
+            if exit_open and exit_pos is not None:
+                updated_agents = self._snapshot_agents()
+                humans = [a for a in updated_agents if a.role == "human"]
+                if humans and all(a.position == exit_pos for a in humans):
+                    frames.append(SimulationFrame(
+                        step=step + 1,
+                        outcome="human_reached_exit_all",
+                        agents=updated_agents,
+                        noise_ripple_pos=self.last_noise_ripple if self.enable_mechanics else None,
+                        radar_threat=self.last_radar_threat if self.enable_mechanics else None,
+                        alien_heard_pos=alien_heard,
+                    ))
+                    return frames, "human_reached_exit_all"
 
         return frames, "max_steps_reached"
 
@@ -480,14 +865,14 @@ class GenericMapSimulation:
     ):
         world_cmap = ListedColormap(self.WORLD_COLORS)
         knowledge_cmap = ListedColormap(self.KNOWLEDGE_COLORS)
-        unknown_value = 7
+        unknown_value = 8
 
         has_single_pair = len(frames[0].agents) == 2 and {a.role for a in frames[0].agents} == {"human", "alien"}
 
         if world_only or self.knowledge_mode == "off":
             fig, ax = plt.subplots(1, 1, figsize=(8, 6), dpi=120)
             fig.patch.set_facecolor("#000000")
-            ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=6)
+            ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=7)
             ax.autoscale(False)  # prevent large Circle patches from shrinking the map
             ax.set_title("Game World", color="white", fontsize=13, fontweight="bold")
             ax.set_xticks([])
@@ -499,7 +884,7 @@ class GenericMapSimulation:
             color_map = self._role_colors()
             for index, agent in enumerate(frames[0].agents):
                 color = color_map[agent.role][index % len(color_map[agent.role])]
-                marker = self._role_marker(agent.role, index)
+                marker = self._role_marker(agent, index)
                 y, x = agent.position
                 artist = ax.scatter([x], [y], s=120, c=color, edgecolors="white", linewidths=1.0, marker=marker, zorder=5)
                 marker_artists.append(artist)
@@ -623,7 +1008,7 @@ class GenericMapSimulation:
             axes = [axes]
 
         world_ax = axes[0]
-        world_ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=6)
+        world_ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=7)
         world_ax.autoscale(False)  # prevent large Circle patches from shrinking the map
         world_ax.set_title("World", color="white", fontsize=12, fontweight="bold")
         world_ax.set_xticks([])
@@ -640,7 +1025,7 @@ class GenericMapSimulation:
         hidden_rings = []
         for index, agent in enumerate(frames[0].agents):
             color = color_map[agent.role][index % len(color_map[agent.role])]
-            marker = self._role_marker(agent.role, index)
+            marker = self._role_marker(agent, index)
             y, x = agent.position
             world_markers.append(
                 world_ax.scatter([x], [y], s=120, c=color, edgecolors="white", linewidths=1.0, marker=marker, zorder=5)
@@ -666,7 +1051,7 @@ class GenericMapSimulation:
                 initial = np.full(self.grid.shape, unknown_value, dtype=np.int16)
             else:
                 initial = np.where(agent.knowledge_map < 0, unknown_value, agent.knowledge_map)
-            image = axis.imshow(initial, cmap=knowledge_cmap, vmin=0, vmax=7)
+            image = axis.imshow(initial, cmap=knowledge_cmap, vmin=0, vmax=8)
             knowledge_images.append(image)
             y, x = agent.position
             marker_style = "X" if agent.role == "alien" else "o"
@@ -826,12 +1211,21 @@ class GenericMapSimulation:
         }
 
     @staticmethod
-    def _role_marker(role: AgentRole, index: int) -> str:
-        if role == "alien":
-            return GenericMapSimulation.ALIEN_MARKERS[index % len(GenericMapSimulation.ALIEN_MARKERS)]
-        if role == "human":
-            return GenericMapSimulation.HUMAN_MARKERS[index % len(GenericMapSimulation.HUMAN_MARKERS)]
-        return "o"
+    def _role_marker(agent: AgentFrame, index: int) -> str:
+        if agent.role == "alien":
+            return "*"
+
+        if agent.role == "human" and agent.team_role not in (None, TeamRole.NONE):
+            role_markers = {
+                TeamRole.WORKER: "o",
+                TeamRole.DECOY: "D",
+                TeamRole.RUNNER: "^",
+                TeamRole.SCOUT: "s",
+                TeamRole.NONE: GenericMapSimulation.HUMAN_MARKERS[index % len(GenericMapSimulation.HUMAN_MARKERS)],
+            }
+            return role_markers.get(agent.team_role, GenericMapSimulation.HUMAN_MARKERS[index % len(GenericMapSimulation.HUMAN_MARKERS)])
+
+        return GenericMapSimulation.HUMAN_MARKERS[index % len(GenericMapSimulation.HUMAN_MARKERS)]
 
     @staticmethod
     def _maybe_show(fig):

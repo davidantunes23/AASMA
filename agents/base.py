@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from enum import Enum
+from enum import IntEnum
 
 import numpy as np
 
@@ -120,6 +121,9 @@ class BaseHumanAgent(BaseAgent):
     """
 
     hidden: bool = False
+    exit_open: bool = False
+    # Team role (WORKER / RUNNER / DECOY / etc.). May be None when unassigned.
+    team_role: "TeamRole | None" = None
 
     def observe(
         self,
@@ -129,3 +133,11 @@ class BaseHumanAgent(BaseAgent):
     ) -> None:
         """Ingest this step's observation. No-op by default (random agents)."""
         pass
+
+
+class TeamRole(IntEnum):
+    NONE = 0
+    WORKER = 1
+    RUNNER = 2
+    DECOY = 3
+    SCOUT = 4
