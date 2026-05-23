@@ -64,10 +64,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--human-view", type=int, default=6, help="Human observation radius (default: 6)")
     parser.add_argument("--alien-fov", type=int, default=6, help="Alien FOV radius (default: 6)")
     parser.add_argument("--noise-radius", type=int, default=2, help="Max cell offset for player noise (default: 2)")
+    parser.add_argument("--mission-steps", type=int, default=3,
+                        help="Steps required to complete each mission tile (default: 3)")
+    parser.add_argument("--mission-count", type=int, default=0,
+                        help="Number of mission tiles to place (default: 0)")
+    parser.add_argument("--random-map", action="store_true",
+                        help="Use a random seed for map/agent generation")
     parser.add_argument("--min-start-distance", type=int, default=0,
                         help="Minimum topology distance between player and alien spawn tiles (default: 0)")
-    parser.add_argument("--missions", type=int, default=1,
-                        help="Number of mission tiles to place on the map (default: 1)")
     return parser.parse_args()
 
 
@@ -144,8 +148,17 @@ def build_agents(grid: np.ndarray, demo: str, seed: int, min_start_distance: int
 
 def main():
     args = parse_args()
+    if args.random_map:
+        args.seed = random.randint(0, 2**31 - 1)
+        print(f"Random map seed: {args.seed}")
 
-    generator = MapGenerator(width=args.width, height=args.height, alpha=args.alpha, seed=args.seed)
+    generator = MapGenerator(
+        width=args.width,
+        height=args.height,
+        alpha=args.alpha,
+        seed=args.seed,
+        mission_count=args.mission_count,
+    )
     grid = generator.generate()
 
     player_start = find_tile(grid, Tile.PLAYER_START)
@@ -173,6 +186,7 @@ def main():
         enable_mechanics=(args.demo == "rule"),
         noise_radius=args.noise_radius,
         seed=args.seed,
+        mission_steps=args.mission_steps,
     )
     simulation.mission_tile_values = {int(Tile.MISSION)}
 

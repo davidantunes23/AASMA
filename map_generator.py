@@ -10,7 +10,7 @@ Tile legend:
     4 PLAYER_START  player spawn
     5 ALIEN_START   alien spawn
     6 EXIT          player goal
-    7 MISSION       mission target tile
+    7 MISSION       intermediate objective
 
 Alpha parameter  alpha in [-1, +1]:
     alpha < 0  -> player-favoured  (more hiding spots per room, fewer vents)
@@ -84,6 +84,7 @@ class MapGenerator:
         max_room_size: int | None = None,
         max_rooms: int | None = None,
         max_hides_per_room: int | None = None,
+        mission_count: int = 0,
     ):
         if not -1.0 <= alpha <= 1.0:
             raise ValueError("alpha must be in [-1, +1]")
@@ -109,6 +110,9 @@ class MapGenerator:
             if max_hides_per_room < 0:
                 raise ValueError("max_hides_per_room must be >= 0")
             self.max_hides_per_room = max_hides_per_room
+        if mission_count < 0:
+            raise ValueError("mission_count must be >= 0")
+        self.mission_count = mission_count
 
         self.rng = random.Random(self.seed)
         self.np_rng = np.random.default_rng(self.seed)
@@ -169,6 +173,7 @@ class MapGenerator:
                 max_room_size=self.max_room_size,
                 max_rooms=self.max_rooms,
                 max_hides_per_room=self.max_hides_per_room,
+                mission_count=self.mission_count,
                 target_player_exit_dist=target_player_exit_dist,
                 target_alien_player_dist=target_alien_player_dist,
             )
@@ -297,6 +302,7 @@ class MapGenerator:
             alpha=m["alpha"],
             seed=m["seed"],
             max_hides_per_room=m.get("hide_max_per_room", 3),
+            mission_count=m.get("mission_count", 0),
         )
         gen.grid = np.array(data["grid"], dtype=np.int8)
         gen.metadata = m
@@ -432,6 +438,30 @@ class MapGenerator:
                 if (hx, hy) not in special_tiles:
                     self.grid[hy, hx] = Tile.HIDE
 
+        # Missions: place on remaining floor tiles after vents and hides.
+        # Ensure no two missions share a room.
+        if self.mission_count > 0:
+            room_candidates: list[list[tuple[int, int]]] = []
+            for room in self.rooms:
+                x, y, w, h = room
+                candidates: list[tuple[int, int]] = []
+                for ry in range(y, y + h):
+                    for rx in range(x, x + w):
+                        if self.grid[ry, rx] != Tile.FLOOR:
+                            continue
+                        if (rx, ry) in special_tiles:
+                            continue
+                        candidates.append((ry, rx))
+                if candidates:
+                    room_candidates.append(candidates)
+
+            if room_candidates:
+                n_missions = min(self.mission_count, len(room_candidates))
+                for candidates in self.rng.sample(room_candidates, n_missions):
+                    my, mx = self.rng.choice(candidates)
+                    self.grid[my, mx] = Tile.MISSION
+                    special_tiles.add((mx, my))
+
     # ── Connectivity validation ─────────────────────────────────────────────────
     def _validate_connectivity(self):
         passable = {
@@ -441,6 +471,7 @@ class MapGenerator:
             Tile.PLAYER_START,
             Tile.ALIEN_START,
             Tile.EXIT,
+            Tile.MISSION,
         }
         reachable = self._bfs_reachable(self.player_pos, passable)
 
@@ -499,6 +530,7 @@ class MapGenerator:
             Tile.PLAYER_START,
             Tile.ALIEN_START,
             Tile.EXIT,
+            Tile.MISSION,
         }
         d_pe = self._bfs_distance(self.player_pos, self.exit_pos, passable)
         d_ae = self._bfs_distance(self.alien_pos, self.exit_pos, passable)
@@ -513,6 +545,7 @@ class MapGenerator:
             "height": self.height,
             "n_rooms": len(self.rooms),
             "hide_max_per_room": self.max_hides_per_room,
+            "mission_count": self.mission_count,
             "hide_distribution": [
                 round(p, 4) for p in self.hide_count_distribution(self.max_hides_per_room)
             ],
@@ -523,6 +556,7 @@ class MapGenerator:
             if self.rooms
             else 0.0,
             "hide_number": counts.get(Tile.HIDE, 0),
+            "mission_number": counts.get(Tile.MISSION, 0),
             "player_start": list(self.player_pos),
             "alien_start": list(self.alien_pos),
             "exit_pos": list(self.exit_pos),
@@ -602,6 +636,7 @@ def visualise_pygame(gen: MapGenerator, cell: int = 24):
         Tile.PLAYER_START: (50, 150, 230),
         Tile.ALIEN_START: (210, 50, 50),
         Tile.EXIT: (230, 190, 40),
+        Tile.MISSION: (26, 188, 156),
     }
     LABELS = {
         Tile.VENT: "V",
@@ -609,6 +644,7 @@ def visualise_pygame(gen: MapGenerator, cell: int = 24):
         Tile.PLAYER_START: "P",
         Tile.ALIEN_START: "A",
         Tile.EXIT: "E",
+        Tile.MISSION: "M",
     }
 
     W, H = gen.width * cell, gen.height * cell
@@ -705,6 +741,7 @@ TILE_COLORS = {
     Tile.PLAYER_START: "#2980b9",
     Tile.ALIEN_START: "#c0392b",
     Tile.EXIT: "#f39c12",
+    Tile.MISSION: "#1abc9c",
 }
 
 TILE_LABELS = {
@@ -715,6 +752,7 @@ TILE_LABELS = {
     Tile.PLAYER_START: "Player Start",
     Tile.ALIEN_START: "Alien Start",
     Tile.EXIT: "Exit",
+    Tile.MISSION: "Mission",
 }
 
 TILE_SYMBOLS = {
@@ -723,6 +761,7 @@ TILE_SYMBOLS = {
     Tile.PLAYER_START: "P",
     Tile.ALIEN_START: "A",
     Tile.EXIT: "E",
+    Tile.MISSION: "M",
 }
 
 
@@ -789,7 +828,16 @@ def visualise_map(
 
     patches = [
         mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
-        for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]
+        for t in [
+            Tile.WALL,
+            Tile.FLOOR,
+            Tile.VENT,
+            Tile.HIDE,
+            Tile.PLAYER_START,
+            Tile.ALIEN_START,
+            Tile.EXIT,
+            Tile.MISSION,
+        ]
     ]
     ax.legend(handles=patches, loc="lower center", bbox_to_anchor=(0.5, -0.13), ncol=4,
               framealpha=0.15, facecolor="#1a1a2e", edgecolor="#444", fontsize=7.5,
@@ -830,7 +878,16 @@ def visualise_alpha_comparison(
                      color="white", fontsize=8, pad=5)
 
     patches = [mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
-               for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]]
+               for t in [
+                   Tile.WALL,
+                   Tile.FLOOR,
+                   Tile.VENT,
+                   Tile.HIDE,
+                   Tile.PLAYER_START,
+                   Tile.ALIEN_START,
+                   Tile.EXIT,
+                   Tile.MISSION,
+               ]]
     fig.legend(handles=patches, loc="lower center", ncol=7, framealpha=0.15, facecolor="#1a1a2e",
                edgecolor="#555", fontsize=7.5, labelcolor="white", handlelength=1.2, borderpad=0.7,
                bbox_to_anchor=(0.5, 0.0))
@@ -866,7 +923,16 @@ def visualise_current_maps_comparison(
                      color="white", fontsize=8, pad=5)
 
     patches = [mpatches.Patch(color=TILE_COLORS[t], label=TILE_LABELS[t])
-               for t in [Tile.WALL, Tile.FLOOR, Tile.VENT, Tile.HIDE, Tile.PLAYER_START, Tile.ALIEN_START, Tile.EXIT]]
+               for t in [
+                   Tile.WALL,
+                   Tile.FLOOR,
+                   Tile.VENT,
+                   Tile.HIDE,
+                   Tile.PLAYER_START,
+                   Tile.ALIEN_START,
+                   Tile.EXIT,
+                   Tile.MISSION,
+               ]]
     fig.legend(handles=patches, loc="lower center", ncol=7, framealpha=0.15, facecolor="#1a1a2e",
                edgecolor="#555", fontsize=7.5, labelcolor="white", handlelength=1.2, borderpad=0.7,
                bbox_to_anchor=(0.5, 0.0))
