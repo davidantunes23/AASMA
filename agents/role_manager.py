@@ -70,14 +70,13 @@ def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iter
     """
     missions = list(mission_positions)
     human_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
-    for s in human_specs:
-        if hasattr(s.agent, "mission_positions"):
-            setattr(s.agent, "mission_positions", missions)
-    if not missions or not human_specs:
-        return None
 
     if not missions or not human_specs:
         return None
+    
+    for s in human_specs:
+        if hasattr(s.agent, "mission_positions"):
+            setattr(s.agent, "mission_positions", missions)
 
     best = None
     best_score = -1

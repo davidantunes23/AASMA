@@ -6,23 +6,13 @@ import numpy as np
 
 from agents.base import BaseHumanAgent, Direction, TeamRole
 from map_generator import Tile
+from agents.coord_bus import CoordType, CoordMessage
 
 
 # ── Coord communication types ─────────────────────────────────────────────────
 # [CHANGE] Added CoordType and CoordMessage here (inline, no separate file needed).
 # Justification: keeps the module self-contained; role manager only needs to import
 # this one file to drive the message bus.
-
-class CoordType(Enum):
-    MISSION = auto()   # a new mission tile was discovered
-    EXIT    = auto()   # the exit tile was discovered
-
-
-@dataclass
-class CoordMessage:
-    coord_type: CoordType
-    pos: tuple[int, int]
-    sender_id: int   # agent index — used to skip re-delivering to the sender
 
 
 class RoleHumanAgent(BaseHumanAgent):
@@ -99,6 +89,13 @@ class RoleHumanAgent(BaseHumanAgent):
         """Return new (y, x) position. observe() must be called first each step."""
         if self.exit_open and self._tile_at(self.pos) == int(Tile.EXIT):
             return self.pos
+        
+        if self.team_role == TeamRole.DECOY:
+            return self._decoy_step()
+        if self.team_role == TeamRole.RUNNER:
+            return self._runner_step()
+        if self.team_role == TeamRole.WORKER:
+            return self._worker_step()
 
         # PRIORITY 1: Stay hidden while threat is high
         if self.hidden:
@@ -106,13 +103,6 @@ class RoleHumanAgent(BaseHumanAgent):
                 self.hidden = False
             else:
                 return self.pos
-
-        if self.team_role == TeamRole.DECOY:
-            return self._decoy_step()
-        if self.team_role == TeamRole.RUNNER:
-            return self._runner_step()
-        if self.team_role == TeamRole.WORKER:
-            return self._worker_step()
 
         # PRIORITY 2: Run to exit once known
         if self.exit_open and self._known_exit is not None:
