@@ -75,39 +75,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def place_mission_tiles(
-    grid: np.ndarray,
-    count: int,
-    player_start: tuple[int, int],
-    alien_start: tuple[int, int],
-    avoid: set[tuple[int, int]],
-) -> list[tuple[int, int]]:
-    if count <= 0:
-        return []
-
-    floor_tiles = [(int(y), int(x)) for y, x in np.argwhere(grid == int(Tile.FLOOR))]
-    candidates = [pos for pos in floor_tiles if pos not in avoid]
-    if not candidates:
-        return []
-
-    # Prefer tiles that are well separated from both starts so missions are spread out.
-    candidates.sort(
-        key=lambda pos: (
-            -min(
-                topology_distance(grid, player_start, pos),
-                topology_distance(grid, alien_start, pos),
-            ),
-            pos[0],
-            pos[1],
-        )
-    )
-
-    chosen = candidates[:count]
-    for pos in chosen:
-        grid[pos] = int(Tile.MISSION)
-    return chosen
-
-
 def build_agents(grid: np.ndarray, demo: str, seed: int, min_start_distance: int = 0):
     human_start = find_tile(grid, Tile.PLAYER_START)
     alien_start = find_tile(grid, Tile.ALIEN_START)
@@ -165,16 +132,6 @@ def main():
     alien_start = find_tile(grid, Tile.ALIEN_START)
     chosen_distance = topology_distance(grid, player_start, alien_start)
     print(f"Using seed {args.seed} (player/alien topology distance: {chosen_distance})")
-
-    mission_positions = place_mission_tiles(
-        grid,
-        args.missions,
-        player_start,
-        alien_start,
-        avoid={player_start, alien_start},
-    )
-    if mission_positions:
-        print(f"Placed mission tiles at: {mission_positions}")
 
     agents = build_agents(grid, args.demo, args.seed, min_start_distance=args.min_start_distance)
     simulation = GenericMapSimulation(

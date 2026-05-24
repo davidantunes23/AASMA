@@ -61,6 +61,7 @@ class SimulationFrame:
     step: int
     outcome: str | None
     agents: list[AgentFrame]
+    grid_snapshot: np.ndarray | None = None
     exit_unlocked: bool = True
     noise_ripple_pos: tuple[int, int] | None = None
     radar_threat: str | None = None
@@ -153,6 +154,7 @@ class GenericMapSimulation:
         "#2980b9",  # PLAYER_START
         "#c0392b",  # ALIEN_START
         "#f39c12",  # EXIT
+        "#1abc9c",  # MISSION
         "#1d1f26",  # UNKNOWN
     ]
 
@@ -677,7 +679,8 @@ class GenericMapSimulation:
                 step=step,
                 outcome=outcome,
                 agents=current_agents,
-                exit_unlocked=exit_unlocked,
+                grid_snapshot=self.grid.copy(),
+                exit_unlocked=exit_open,
                 noise_ripple_pos=self.last_noise_ripple if self.enable_mechanics else None,
                 radar_threat=self.last_radar_threat if self.enable_mechanics else None,
                 alien_heard_pos=alien_heard,
@@ -845,7 +848,6 @@ class GenericMapSimulation:
                     if other.label != spec.label
                     and other.role != spec.role
                     and other.label not in captured_humans
-                    and not (other.role == "human" and self._is_hidden_position(self._get_position(other)))
                 ]
                 nearest_target = self._nearest_target(current_position, opposing_positions) or current_position
                 # Pass the same heard position to all aliens (None if no humans)
@@ -871,6 +873,7 @@ class GenericMapSimulation:
                     step=step + 1,
                     outcome=outcome,
                     agents=final_agents,
+                    grid_snapshot=self.grid.copy(),
                     noise_ripple_pos=self.last_noise_ripple if self.enable_mechanics else None,
                     radar_threat=self.last_radar_threat if self.enable_mechanics else None,
                     alien_heard_pos=alien_heard,
@@ -893,6 +896,7 @@ class GenericMapSimulation:
                         step=step + 1,
                         outcome="human_reached_exit_all",
                         agents=updated_agents,
+                        grid_snapshot=self.grid.copy(),
                         noise_ripple_pos=self.last_noise_ripple if self.enable_mechanics else None,
                         radar_threat=self.last_radar_threat if self.enable_mechanics else None,
                         alien_heard_pos=alien_heard,
@@ -921,7 +925,8 @@ class GenericMapSimulation:
         if world_only or self.knowledge_mode == "off":
             fig, ax = plt.subplots(1, 1, figsize=(8, 6), dpi=120)
             fig.patch.set_facecolor("#000000")
-            ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=7)
+            initial_grid = frames[0].grid_snapshot if frames[0].grid_snapshot is not None else self.grid
+            world_image = ax.imshow(initial_grid, cmap=world_cmap, vmin=0, vmax=7)
             ax.autoscale(False)  # prevent large Circle patches from shrinking the map
             ax.set_title("Game World", color="white", fontsize=13, fontweight="bold")
             ax.set_xticks([])
@@ -985,6 +990,8 @@ class GenericMapSimulation:
 
             def update_world(frame_index: int):
                 state = frames[frame_index]
+                if state.grid_snapshot is not None:
+                    world_image.set_data(state.grid_snapshot)
                 human_ring_idx = 0
                 for artist, agent in zip(marker_artists, state.agents):
                     y, x = agent.position
@@ -1069,7 +1076,8 @@ class GenericMapSimulation:
             axes = [axes]
 
         world_ax = axes[0]
-        world_ax.imshow(self.grid, cmap=world_cmap, vmin=0, vmax=7)
+        initial_grid = frames[0].grid_snapshot if frames[0].grid_snapshot is not None else self.grid
+        world_image = world_ax.imshow(initial_grid, cmap=world_cmap, vmin=0, vmax=7)
         world_ax.autoscale(False)  # prevent large Circle patches from shrinking the map
         world_ax.set_title("World", color="white", fontsize=12, fontweight="bold")
         world_ax.set_xticks([])
@@ -1173,6 +1181,8 @@ class GenericMapSimulation:
 
         def update_full(frame_index: int):
             state = frames[frame_index]
+            if state.grid_snapshot is not None:
+                world_image.set_data(state.grid_snapshot)
             human_ring_idx = 0
             for artist, agent in zip(world_markers, state.agents):
                 y, x = agent.position
