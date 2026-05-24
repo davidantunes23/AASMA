@@ -24,11 +24,6 @@ def assign_worker_greedy(agent_specs: Sequence[object], mission_positions: Itera
     missions = list(mission_positions)
     # Clear existing worker assignments
     human_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
-    for s in human_specs:
-        try:
-            setattr(s.agent, "team_role", TeamRole.NONE)
-        except Exception:
-            pass
 
     if not missions or not human_specs:
         return None
@@ -76,13 +71,10 @@ def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iter
     missions = list(mission_positions)
     human_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
     for s in human_specs:
-        try:
-            setattr(s.agent, "team_role", TeamRole.NONE)
-            # inform agent of missions if supported
-            if hasattr(s.agent, "mission_positions"):
-                setattr(s.agent, "mission_positions", missions)
-        except Exception:
-            pass
+        if hasattr(s.agent, "mission_positions"):
+            setattr(s.agent, "mission_positions", missions)
+    if not missions or not human_specs:
+        return None
 
     if not missions or not human_specs:
         return None
@@ -119,16 +111,10 @@ def assign_runner_greedy(agent_specs: Sequence[object], exit_position: tuple[int
     label of the chosen agent, or None.
     """
     human_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
-    for s in human_specs:
-        try:
-            setattr(s.agent, "team_role", TeamRole.NONE)
-        except Exception:
-            pass
 
     if exit_position is None or not human_specs:
         return None
 
-    ex, ey = exit_position[1], exit_position[0]
     best = None
     best_score = None
     for s in human_specs:
