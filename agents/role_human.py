@@ -44,6 +44,10 @@ class RoleHumanAgent(BaseHumanAgent):
         self._observed_aliens: set[tuple[int, int]] = set()
         self.made_loud_noise: bool = False
 
+        # Mission counters (updated by simulation)
+        self.missions_total: int = 0
+        self.missions_remaining: int = 0
+
         # [CHANGE] agent_id: must be set by role manager after construction.
         # Justification: needed so outbox messages carry the sender's identity,
         # allowing the bus to skip re-delivering a message to its own sender.
@@ -89,13 +93,6 @@ class RoleHumanAgent(BaseHumanAgent):
         """Return new (y, x) position. observe() must be called first each step."""
         if self.exit_open and self._tile_at(self.pos) == int(Tile.EXIT):
             return self.pos
-        
-        if self.team_role == TeamRole.DECOY:
-            return self._decoy_step()
-        if self.team_role == TeamRole.RUNNER:
-            return self._runner_step()
-        if self.team_role == TeamRole.WORKER:
-            return self._worker_step()
 
         # PRIORITY 1: Stay hidden while threat is high
         if self.hidden:
@@ -104,15 +101,7 @@ class RoleHumanAgent(BaseHumanAgent):
             else:
                 return self.pos
 
-        # PRIORITY 2: Run to exit once known
-        if self.exit_open and self._known_exit is not None:
-            nxt = self._step_toward_target(self._known_exit)
-            if nxt is not None and nxt != self.pos:
-                self.pos    = nxt
-                self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                return self.pos
-
-        # PRIORITY 3: Hide when threatened
+        # PRIORITY 2: Hide when threatened (shared survival logic)
         if self._should_hide_now():
             spot = self._get_closest_hiding_spot()
             if spot is not None:
@@ -124,6 +113,36 @@ class RoleHumanAgent(BaseHumanAgent):
                         self.hidden = True
                     self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
                     return self.pos
+
+        # PRIORITY 3: If all missions are done, prioritize exit/search
+        if self.missions_remaining == 0:
+            if self._known_exit is not None:
+                nxt = self._step_toward_target(self._known_exit)
+                if nxt is not None and nxt != self.pos:
+                    self.pos = nxt
+                    self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                    return self.pos
+            nxt = self._next_step_to_nearest_frontier() or self._best_local_move()
+            if nxt is not None and nxt != self.pos:
+                self.direction = self._direction_from_step(self.pos, nxt)
+                self.pos = nxt
+            self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+            return self.pos
+        
+        if self.team_role == TeamRole.DECOY:
+            return self._decoy_step()
+        if self.team_role == TeamRole.RUNNER:
+            return self._runner_step()
+        if self.team_role == TeamRole.WORKER:
+            return self._worker_step()
+
+        # PRIORITY 4: Run to exit once known
+        if self.exit_open and self._known_exit is not None:
+            nxt = self._step_toward_target(self._known_exit)
+            if nxt is not None and nxt != self.pos:
+                self.pos    = nxt
+                self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                return self.pos
 
         # PRIORITY 4: Explore
         nxt = self._adjacent_unknown_step()
@@ -188,6 +207,9 @@ class RoleHumanAgent(BaseHumanAgent):
                     if self._known_map is not None and self._in_bounds(*msg.pos):
                         if self._known_map[msg.pos] == self.UNKNOWN:
                             self._known_map[msg.pos] = int(Tile.MISSION)
+
+            elif msg.coord_type == CoordType.MISSION_DONE:
+                self.remove_mission(msg.pos)
 
             elif msg.coord_type == CoordType.EXIT:
                 if self._known_exit is None:
@@ -382,9 +404,6 @@ class RoleHumanAgent(BaseHumanAgent):
 
     def _should_hide_now(self) -> bool:
         if self.last_radar_threat is None:
-            return False
-        # WORKER role disables hiding (masking operator)
-        if self.team_role == TeamRole.WORKER:
             return False
         if self.last_radar_threat == "CRITICAL":
             return True

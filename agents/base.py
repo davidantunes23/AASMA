@@ -140,4 +140,3 @@ class TeamRole(IntEnum):
     WORKER = 1
     RUNNER = 2
     DECOY = 3
-    SCOUT = 4
