@@ -1,10 +1,3 @@
-"""Simple team-role manager utilities for human agents.
-
-This module implements a minimal, greedy assignment function that picks the
-closest human agent to any mission tile and assigns it the WORKER role. The
-implementation is intentionally lightweight and designed to be called from the
-simulation loop when the set of visible mission tiles changes.
-"""
 from __future__ import annotations
 
 from typing import Iterable, Sequence
@@ -25,6 +18,8 @@ def assign_worker_greedy(agent_specs: Sequence[object], mission_positions: Itera
     # Clear existing worker assignments
     human_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
 
+    # Choose the human closest to any mission using Manhattan distance.
+
     if not missions or not human_specs:
         return None
 
@@ -44,6 +39,7 @@ def assign_worker_greedy(agent_specs: Sequence[object], mission_positions: Itera
         return None
 
     try:
+        # Promote selected agent to WORKER role.
         setattr(best.agent, "team_role", TeamRole.WORKER)
     except Exception:
         return None
@@ -56,6 +52,7 @@ def clear_roles(agent_specs: Sequence[object]):
     for s in agent_specs:
         if getattr(s, "role", None) == "human":
             try:
+                # Reset role to NONE for human agents.
                 setattr(s.agent, "team_role", TeamRole.NONE)
             except Exception:
                 pass
@@ -78,6 +75,8 @@ def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iter
         if hasattr(s.agent, "mission_positions"):
             setattr(s.agent, "mission_positions", missions)
 
+    # Score agents by distance to missions; choose the one farthest away.
+
     best = None
     best_score = -1
     for s in human_specs:
@@ -94,6 +93,7 @@ def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iter
         return None
 
     try:
+        # Assign DECOY to the chosen agent.
         setattr(best.agent, "team_role", TeamRole.DECOY)
         if hasattr(best.agent, "mission_positions"):
             setattr(best.agent, "mission_positions", missions)
@@ -123,6 +123,7 @@ def assign_runner_greedy(agent_specs: Sequence[object], exit_position: tuple[int
         dist_exit = abs(pos[0] - exit_position[0]) + abs(pos[1] - exit_position[1])
         dist_alien = float('inf') if alien_position is None else (abs(pos[0] - alien_position[0]) + abs(pos[1] - alien_position[1]))
         # score: prefer small dist_exit and large dist_alien
+        # Higher score means better RUNNER candidate: close to exit, far from alien.
         score = -dist_exit + dist_alien
         if best is None or score > best_score:
             best = s

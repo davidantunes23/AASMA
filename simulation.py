@@ -19,6 +19,7 @@ from agents.role_manager import (
     assign_worker_greedy,
     assign_decoy_farthest,
     assign_runner_greedy,
+    clear_roles,
 )
 from map_generator import Tile
 
@@ -57,6 +58,7 @@ class AgentFrame:
     mode: str = ""  # human: EXPLORING/FLEEING/HIDING; alien: SEARCH/INVESTIGATE/HUNT
     fov: frozenset = field(default_factory=frozenset)         # (y,x) cells visible this step
     visible_opponent: Optional[tuple[int, int]] = None        # opponent pos if inside FOV and not hidden
+    agent_id: Optional[int] = None
 
 
 @dataclass
@@ -72,6 +74,7 @@ class SimulationFrame:
     shared_missions: list[tuple[int, int]] | None = None
     shared_exit: tuple[int, int] | None = None
     captured_humans: list[str] | None = None
+    mission_done_events: list[tuple[tuple[int, int], int]] | None = None
 
 
 THREAT_COLORS = {
@@ -223,6 +226,8 @@ class GenericMapSimulation:
         # Shared-coordinates bus (role-aware agents only)
         self.shared_mission_coords: set[tuple[int, int]] = set()
         self.shared_exit_coord: tuple[int, int] | None = None
+        self.completed_mission_events: list[tuple[tuple[int, int], int]] = []
+        self._active_frame: SimulationFrame | None = None
 
         self.mission_manager = mission_manager
         if self.mission_manager is None and mission_steps is not None and mission_steps > 0:
@@ -243,11 +248,12 @@ class GenericMapSimulation:
         else:
             self.knowledge = {}
 
-        # Assign stable agent_id values if role-aware agents expose the field
+        # Assign stable agent_id values if role-aware agents expose the field.
+        # Treat negative values as the unset sentinel (agents may default to -1).
         human_idx = 0
         for spec in self.agents:
             if spec.role == "human" and hasattr(spec.agent, "agent_id"):
-                if getattr(spec.agent, "agent_id", 0) == 0:
+                if getattr(spec.agent, "agent_id", -1) < 0:
                     setattr(spec.agent, "agent_id", human_idx)
                 human_idx += 1
 
@@ -459,6 +465,10 @@ class GenericMapSimulation:
             # nothing to reassign now — keep pending missions in queue
             return
 
+        # Reset the free pool before reassigning so stale roles do not stick
+        # around after missions are discovered, completed, or lost.
+        clear_roles(free_specs)
+
         # Assign workers among free agents only
         # Convert pending_missions to list for role manager
         missions = list(self.pending_missions) if self.pending_missions else list(self.known_missions)
@@ -614,7 +624,8 @@ class GenericMapSimulation:
             snapshot.append(AgentFrame(label=spec.label, role=spec.role, position=position,
                                        hidden=hidden, team_role=getattr(spec.agent, "team_role", None),
                                        knowledge_map=knowledge_map, mode=mode,
-                                       fov=fov, visible_opponent=visible_opponent))
+                                       fov=fov, visible_opponent=visible_opponent,
+                                       agent_id=getattr(spec.agent, "agent_id", None)))
         return snapshot
 
     def _is_human(self, spec: AgentSpec) -> bool:
@@ -662,6 +673,13 @@ class GenericMapSimulation:
             return False
         if self.grid[position] not in {int(v) for v in self.mission_tile_values}:
             return False
+        completer_id = None
+        for spec in self.agents:
+            if spec.role != "human":
+                continue
+            if self._get_position(spec) == position:
+                completer_id = getattr(spec.agent, "agent_id", None)
+                break
         self.grid[position] = int(Tile.FLOOR)
         if self.knowledge_mode == "on":
             for km in self.knowledge.values():
@@ -685,6 +703,14 @@ class GenericMapSimulation:
         self.known_missions.discard(position)
         self.pending_missions.discard(position)
         self.shared_mission_coords.discard(position)
+        if completer_id is None:
+            completer_id = -1
+        event = (position, int(completer_id))
+        self.completed_mission_events.append(event)
+        if self._active_frame is not None:
+            if self._active_frame.mission_done_events is None:
+                self._active_frame.mission_done_events = []
+            self._active_frame.mission_done_events.append(event)
         self._maybe_reassign_roles(mission_completed=True)
         return True
 
@@ -742,8 +768,11 @@ class GenericMapSimulation:
                 shared_missions=sorted(self.shared_mission_coords),
                 shared_exit=self.shared_exit_coord,
                 captured_humans=sorted(captured_humans),
+                mission_done_events=list(self.completed_mission_events),
             ))
+            self._active_frame = frames[-1]
             if outcome is not None or step == max_steps:
+                self._active_frame = None
                 return frames, outcome or "max_steps_reached"
 
             # Update radar before agents act so humans can react to current threat level
@@ -1019,7 +1048,9 @@ class GenericMapSimulation:
                     shared_missions=sorted(self.shared_mission_coords),
                     shared_exit=self.shared_exit_coord,
                     captured_humans=sorted(captured_humans),
+                    mission_done_events=list(self.completed_mission_events),
                 ))
+                self._active_frame = None
                 return frames, outcome
 
             # Update hidden flag for humans after movement
@@ -1045,9 +1076,12 @@ class GenericMapSimulation:
                         shared_missions=sorted(self.shared_mission_coords),
                         shared_exit=self.shared_exit_coord,
                         captured_humans=sorted(captured_humans),
+                        mission_done_events=list(self.completed_mission_events),
                     ))
+                    self._active_frame = None
                     return frames, "human_reached_exit_all"
 
+        self._active_frame = None
         return frames, "max_steps_reached"
 
     # ── Render ────────────────────────────────────────────────────────────────
@@ -1066,8 +1100,10 @@ class GenericMapSimulation:
         unknown_value = 8
 
         has_single_pair = len(frames[0].agents) == 2 and {a.role for a in frames[0].agents} == {"human", "alien"}
+        # Role-aware humans may start with team_role=NONE until missions are known.
+        # Use agent_id as the stable signal that role labels should be rendered.
         has_role_agents = any(
-            a.role == "human" and a.team_role not in (None, TeamRole.NONE)
+            a.role == "human" and a.agent_id is not None
             for a in frames[0].agents
         )
 
@@ -1090,12 +1126,19 @@ class GenericMapSimulation:
             marker_artists = []
             hidden_rings = []
             color_map = self._role_colors()
+            label_texts = []
             for index, agent in enumerate(frames[0].agents):
                 color = color_map[agent.role][index % len(color_map[agent.role])]
                 marker = self._role_marker(agent, index)
                 y, x = agent.position
                 artist = ax.scatter([x], [y], s=120, c=color, edgecolors="white", linewidths=1.0, marker=marker, zorder=5)
                 marker_artists.append(artist)
+                # Add id:ROLE text for human agents when roles are in use
+                if has_role_agents and agent.role == "human":
+                    aid = agent.agent_id if getattr(agent, "agent_id", None) is not None else "?"
+                    role_name = agent.team_role.name if agent.team_role is not None else "NONE"
+                    txt = ax.text(x + 0.3, y, f"id{aid}: {role_name}", color="white", fontsize=8, zorder=7)
+                    label_texts.append(txt)
                 if agent.role == "human":
                     hidden_rings.append(
                         ax.scatter([x], [y], s=210, facecolors="none", edgecolors="#7CFF6B",
@@ -1173,6 +1216,15 @@ class GenericMapSimulation:
                         hidden_rings[human_ring_idx].set_offsets([[x, y]])
                         hidden_rings[human_ring_idx].set_visible(agent.hidden)
                         human_ring_idx += 1
+                # Update label texts positions and content — pair texts with human agents only
+                if has_role_agents:
+                    human_agents = [a for a in state.agents if a.role == "human"]
+                    for txt, agent in zip(label_texts, human_agents):
+                        aid = agent.agent_id if getattr(agent, "agent_id", None) is not None else "?"
+                        role_name = agent.team_role.name if agent.team_role is not None else "NONE"
+                        txt.set_position((agent.position[1] + 0.3, agent.position[0]))
+                        txt.set_text(f"id{aid}: {role_name}")
+                        txt.set_visible(agent.label not in captured)
 
                 # Radar threat rings — recentre on current human pos, highlight active band
                 humans = [a for a in state.agents if a.role == "human"]
@@ -1296,7 +1348,13 @@ class GenericMapSimulation:
         opp_markers = []      # visible-opponent marker per panel
         H_grid, W_grid = self.grid.shape
         for axis, agent in zip(knowledge_axes, frames[0].agents):
-            axis.set_title(f"{agent.label} ({agent.role})", color="white", fontsize=11, fontweight="bold")
+            # Show agent label with id and team role when available
+            if agent.role == "human":
+                aid = agent.agent_id if getattr(agent, "agent_id", None) is not None else "?"
+                role_name = agent.team_role.name if agent.team_role is not None else agent.role
+                axis.set_title(f"{agent.label} (id{aid}: {role_name})", color="white", fontsize=11, fontweight="bold")
+            else:
+                axis.set_title(f"{agent.label} ({agent.role})", color="white", fontsize=11, fontweight="bold")
             axis.set_xticks([])
             axis.set_yticks([])
             axis.set_facecolor("#0f0f1e")
@@ -1544,6 +1602,16 @@ class GenericMapSimulation:
                 lines.append(f"... +{len(missions) - len(shown)}")
         else:
             lines.append("MISSIONS: --")
+        done_events = state.mission_done_events or []
+        if done_events:
+            lines.append("DONE:")
+            shown_done = done_events[-4:]
+            for pos, agent_id in shown_done:
+                lines.append(f"- ({pos[0]}, {pos[1]}) by id{agent_id}")
+            if len(done_events) > len(shown_done):
+                lines.append(f"... +{len(done_events) - len(shown_done)}")
+        else:
+            lines.append("DONE: --")
         return "\n".join(lines)
 
     @staticmethod

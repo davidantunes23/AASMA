@@ -1,24 +1,18 @@
 from collections import deque
-from dataclasses import dataclass  # [CHANGE] imported for CoordMessage
-from enum import Enum, auto        # [CHANGE] imported for CoordType
 
 import numpy as np
 
 from agents.base import BaseHumanAgent, Direction, TeamRole
-from map_generator import Tile
 from agents.coord_bus import CoordType, CoordMessage
-
-
-# ── Coord communication types ─────────────────────────────────────────────────
-# [CHANGE] Added CoordType and CoordMessage here (inline, no separate file needed).
-# Justification: keeps the module self-contained; role manager only needs to import
-# this one file to drive the message bus.
-
+from map_generator import Tile
 
 class RoleHumanAgent(BaseHumanAgent):
     """Role-aware human agent. Behaves like `HumanAgent` but exposes
     `team_role` and respects masking operators (e.g., WORKER disables hiding).
     """
+
+    _next_agent_id = 0
+    _initial_roles = (TeamRole.WORKER, TeamRole.DECOY, TeamRole.RUNNER)
 
     UNKNOWN      = -1
     ALIEN        = -2
@@ -31,12 +25,18 @@ class RoleHumanAgent(BaseHumanAgent):
         start_dir: Direction = Direction.NORTH,
         view_length: int = 6,
     ):
+        self.agent_id: int = RoleHumanAgent._next_agent_id
+        RoleHumanAgent._next_agent_id += 1
+
         self.pos          = start_pos
         self.direction    = start_dir
         self.view_length  = view_length
         self.hidden: bool = False
         self.exit_open: bool = False
-        self.team_role: TeamRole | None = TeamRole.NONE
+        if self.agent_id < len(self._initial_roles):
+            self.team_role: TeamRole | None = self._initial_roles[self.agent_id]
+        else:
+            self.team_role = TeamRole.NONE
         self.last_radar_threat: str | None = None
         self.last_radar_dist:   int | None = None
         self._known_map:  np.ndarray | None       = None
@@ -48,26 +48,13 @@ class RoleHumanAgent(BaseHumanAgent):
         self.missions_total: int = 0
         self.missions_remaining: int = 0
 
-        # [CHANGE] agent_id: must be set by role manager after construction.
-        # Justification: needed so outbox messages carry the sender's identity,
-        # allowing the bus to skip re-delivering a message to its own sender.
-        self.agent_id: int = 0
-
-        # [CHANGE] mission_positions now stays as the live list consumed by
-        # _nearest_mission(), but is populated BOTH externally (role manager
-        # injection, unchanged) AND via receive_coords() for new discoveries.
-        # No behaviour change — existing callers still work.
+        # Known mission positions, updated from sensing and teammate messages.
         self.mission_positions: list[tuple[int, int]] = []
 
-        # [CHANGE] _known_mission_coords: a set mirror of mission_positions used
-        # for O(1) duplicate checks in receive_coords() and _integrate_observation().
-        # Justification: list.count / list.__contains__ is O(n); set is O(1).
+        # Fast lookup for duplicate mission discovery.
         self._known_mission_coords: set[tuple[int, int]] = set()
 
-        # [CHANGE] _outbox: collects CoordMessages produced during observe().
-        # The role manager calls flush_outbox() each step and fans messages out.
-        # Justification: decouples discovery from delivery; agents never talk
-        # directly to each other, preserving the existing single-agent interface.
+        # Messages discovered during observe() are queued here.
         self._outbox: list[CoordMessage] = []
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -172,32 +159,20 @@ class RoleHumanAgent(BaseHumanAgent):
         self.hidden               = False
         self.last_radar_threat    = None
         self.last_radar_dist      = None
-        # [CHANGE] also reset coord-bus state on episode reset.
-        # Justification: stale outbox messages or mission sets from a previous
-        # episode would pollute the new one.
+        # Clear shared-state caches between episodes.
         self._outbox.clear()
         self.mission_positions        = []
         self._known_mission_coords    = set()
 
     # ── Coord message bus ─────────────────────────────────────────────────────
 
-    # [CHANGE] flush_outbox: called by the role manager after every observe()
-    # to collect messages this agent produced and broadcast them to others.
-    # Justification: pull-based delivery keeps agents passive; the role manager
-    # drives all coordination, consistent with the existing design.
+    # Return and clear messages discovered in the latest observation.
     def flush_outbox(self) -> list[CoordMessage]:
         msgs = self._outbox.copy()
         self._outbox.clear()
         return msgs
 
-    # [CHANGE] receive_coords: injects discovered coords from other agents.
-    # Each coord type is handled separately:
-    #   MISSION → appended to mission_positions + written into _known_map so
-    #             BFS can path to the tile even before the agent sees it.
-    #   EXIT    → sets _known_exit + writes tile into _known_map for the same
-    #             reason. Only accepted if we don't already know the exit
-    #             (first-write-wins; our own observation always takes precedence
-    #             because _integrate_observation runs before receive_coords).
+    # Merge coordinates received from teammates.
     def receive_coords(self, messages: list[CoordMessage]) -> None:
         for msg in messages:
             if msg.coord_type == CoordType.MISSION:
@@ -217,9 +192,7 @@ class RoleHumanAgent(BaseHumanAgent):
                     if self._known_map is not None and self._in_bounds(*msg.pos):
                         self._known_map[msg.pos] = int(Tile.EXIT)
 
-    # [CHANGE] remove_mission: called by the role manager when MissionManager
-    # marks a tile complete. Keeps mission_positions and the set in sync so the
-    # WORKER and DECOY stop targeting or fleeing from a finished tile.
+    # Remove a mission that has already been completed.
     def remove_mission(self, pos: tuple[int, int]) -> None:
         self._known_mission_coords.discard(pos)
         if pos in self.mission_positions:
@@ -250,15 +223,11 @@ class RoleHumanAgent(BaseHumanAgent):
         else:
             self._observed_aliens = set()
 
-        # [CHANGE] Exit discovery now also queues a CoordMessage the first time.
-        # Justification: previously _known_exit was silently updated; now the
-        # discovery is broadcast so the RUNNER can share it with WORKER/DECOY
-        # (and vice-versa) without a shared map.
+        # Broadcast the exit the first time it becomes known.
         ey, ex = np.where(self._known_map == int(Tile.EXIT))
         if len(ey) > 0:
             found_exit = (int(ey[0]), int(ex[0]))
             if self._known_exit is None:
-                # First sighting — emit broadcast
                 self._outbox.append(CoordMessage(
                     coord_type=CoordType.EXIT,
                     pos=found_exit,
@@ -266,11 +235,7 @@ class RoleHumanAgent(BaseHumanAgent):
                 ))
             self._known_exit = found_exit
 
-        # [CHANGE] Mission discovery: scan the *fresh* obs (not full known_map)
-        # so we only emit a message when the tile enters the FOV for the first
-        # time. Using obs instead of _known_map prevents re-broadcasting tiles
-        # that were written in by receive_coords() in a prior step.
-        # Justification: avoids duplicate messages flooding the outbox every step.
+        # Only broadcast missions newly seen in this observation.
         my, mx = np.where(obs == int(Tile.MISSION))
         for y, x in zip(my.tolist(), mx.tolist()):
             pos = (int(y), int(x))
@@ -380,9 +345,7 @@ class RoleHumanAgent(BaseHumanAgent):
         start = self.pos
         if not self._in_bounds(*start):
             return None
-        # [CHANGE] converted hiding_spots to a set for O(1) membership check
-        # inside the BFS loop. Justification: original used a list, so `current
-        # in hiding_spots` was O(n) per BFS node — costly on large maps.
+        # Use a set so the BFS can test targets quickly.
         hiding_set = set(hiding_spots)
         frontier = deque([start])
         parents: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
@@ -647,12 +610,7 @@ class RoleHumanAgent(BaseHumanAgent):
             self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
             return self.pos
 
-        # PRIORITY 3: Exit not found → explore to find it
-        # [CHANGE] RUNNER exploration now prefers floor frontiers over generic
-        # frontiers first, then falls back to generic, then best local.
-        # Justification: floor frontiers are more likely to lead into open rooms
-        # where the exit tile is placed, giving the RUNNER a better exploration
-        # strategy than random frontier walking.
+        # Explore floor frontiers first, then broader frontiers.
         nxt = self._adjacent_unknown_step()
         if nxt is None:
             nxt = self._next_step_to_nearest_floor_frontier()

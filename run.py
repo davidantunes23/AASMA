@@ -48,6 +48,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a simulation with rule-based or random agents")
     parser.add_argument("--demo", choices=["random", "rule"], default="rule",
                         help="Agent type: 'rule' for rule-based, 'random' for random (default: rule)")
+    parser.add_argument("--human-count", type=int, default=1, help="Number of human agents to create (default: 1)")
+    parser.add_argument("--human-class", choices=["random", "human", "role"], default="human",
+                        help="Human agent implementation: 'human' (rule), 'role' (role-aware), or 'random' (default: human)")
+    parser.add_argument("--alien-count", type=int, default=1, help="Number of alien agents to create (default: 1)")
+    parser.add_argument("--alien-class", choices=["random", "alien"], default="alien",
+                        help="Alien agent implementation: 'alien' (rule) or 'random' (default: alien)")
     parser.add_argument("--knowledge", choices=["off", "on"], default="on",
                         help="Show per-agent knowledge panels in the GIF (default: on)")
     parser.add_argument("--style", choices=["full", "world"], default="full",
@@ -75,7 +81,16 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_agents(grid: np.ndarray, demo: str, seed: int, min_start_distance: int = 0):
+def build_agents(
+    grid: np.ndarray,
+    demo: str,
+    seed: int,
+    min_start_distance: int = 0,
+    human_count: int = 1,
+    human_class: str = "human",
+    alien_count: int = 1,
+    alien_class: str = "alien",
+):
     human_start = find_tile(grid, Tile.PLAYER_START)
     alien_start = find_tile(grid, Tile.ALIEN_START)
 
@@ -90,27 +105,41 @@ def build_agents(grid: np.ndarray, demo: str, seed: int, min_start_distance: int
             if floor_candidates:
                 alien_start = floor_candidates[0]
 
-    if demo == "rule":
-        from agents.alien import AlienAgent
-        from agents.base import Direction
+    specs: list = []
+
+    # Helper to create human instances depending on chosen class
+    def make_human_instance(ix: int):
+        if human_class == "random" or demo == "random":
+            from agents.random_human import RandomHumanAgent
+            return RandomHumanAgent(grid=grid.copy(), pos=human_start, rng=random.Random(seed + ix))
+        if human_class == "role":
+            from agents.role_human import RoleHumanAgent
+            from agents.base import Direction
+            return RoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
+        # default: rule-based HumanAgent
         from agents.human import HumanAgent
+        from agents.base import Direction
+        return HumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
 
-        human = HumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
-        alien = AlienAgent(grid=grid.copy(), start_pos=alien_start)
-        return [
-            build_agent_spec("human_1", "human", human),
-            build_agent_spec("alien_1", "alien", alien),
-        ]
+    # Helper to create alien instances depending on chosen class
+    def make_alien_instance(ix: int):
+        if alien_class == "random" or demo == "random":
+            from agents.random_alien import RandomAlienAgent
+            return RandomAlienAgent(grid=grid.copy(), pos=alien_start, rng=random.Random(seed + 100 + ix))
+        from agents.alien import AlienAgent
+        return AlienAgent(grid=grid.copy(), start_pos=alien_start)
 
-    from agents.random_alien import RandomAlienAgent
-    from agents.random_human import RandomHumanAgent
+    # Create requested human agents
+    for i in range(human_count):
+        inst = make_human_instance(i)
+        specs.append(build_agent_spec(f"human_{i+1}", "human", inst))
 
-    human = RandomHumanAgent(grid=grid.copy(), pos=human_start, rng=random.Random(seed))
-    alien = RandomAlienAgent(grid=grid.copy(), pos=alien_start, rng=random.Random(seed + 1))
-    return [
-        build_agent_spec("human_1", "human", human),
-        build_agent_spec("alien_1", "alien", alien),
-    ]
+    # Create requested alien agents
+    for j in range(alien_count):
+        inst = make_alien_instance(j)
+        specs.append(build_agent_spec(f"alien_{j+1}", "alien", inst))
+
+    return specs
 
 
 def main():
@@ -133,7 +162,16 @@ def main():
     chosen_distance = topology_distance(grid, player_start, alien_start)
     print(f"Using seed {args.seed} (player/alien topology distance: {chosen_distance})")
 
-    agents = build_agents(grid, args.demo, args.seed, min_start_distance=args.min_start_distance)
+    agents = build_agents(
+        grid,
+        args.demo,
+        args.seed,
+        min_start_distance=args.min_start_distance,
+        human_count=args.human_count,
+        human_class=args.human_class,
+        alien_count=args.alien_count,
+        alien_class=args.alien_class,
+    )
     simulation = GenericMapSimulation(
         grid=grid.copy(),
         agents=agents,
