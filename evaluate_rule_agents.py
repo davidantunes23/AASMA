@@ -15,18 +15,18 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 try:
-    from agents.alien import AlienAgent
-    from agents.human import Direction as HumanDirection
-    from agents.human import HumanAgent
+    from agents.rule_alien import AlienAgent
+    from agents.rule_human import Direction as HumanDirection
+    from agents.rule_human import HumanAgent
     from game import Game
     from map_generator import MapGenerator, Tile
 except ModuleNotFoundError:
     project_root = Path(__file__).resolve().parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
-    from agents.alien import AlienAgent
-    from agents.human import Direction as HumanDirection
-    from agents.human import HumanAgent
+    from agents.rule_alien import AlienAgent
+    from agents.rule_human import Direction as HumanDirection
+    from agents.rule_human import HumanAgent
     from game import Game
     from map_generator import MapGenerator, Tile
 

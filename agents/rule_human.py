@@ -49,9 +49,8 @@ class HumanAgent(BaseHumanAgent):
         radar_threat: str | None = None,
         radar_dist: int | None = None,
     ) -> None:
-        if radar_threat is not None:
-            self.last_radar_threat = radar_threat
-            self.last_radar_dist = radar_dist
+        self.last_radar_threat = radar_threat
+        self.last_radar_dist = radar_dist
         self._init_memory(obs)
         self._integrate_observation(obs)
 

@@ -1,6 +1,6 @@
 import numpy as np
 
-from agents.human import HumanAgent
+from agents.rule_human import HumanAgent
 
 
 def find_exit(grid):

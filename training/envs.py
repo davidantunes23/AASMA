@@ -2,8 +2,8 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-from agents.alien import AlienAgent
-from agents.human import Direction, HumanAgent
+from agents.rule_alien import AlienAgent
+from agents.rule_human import Direction, HumanAgent
 from game import Game
 
 ACTION_MEANING = {
@@ -93,7 +93,7 @@ class BaseAETEnv(gym.Env):
         return int(action)
 
     def _action_to_human_tuple(self, action: int):
-        from agents.human import Action as HumanAction
+        from agents.rule_human import Action as HumanAction
 
         act_name, dirv = ACTION_MEANING[int(action)]
         if act_name == "WAIT":

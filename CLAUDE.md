@@ -22,12 +22,18 @@ python run.py --demo rule --seed 42 --no-render
 # Random baseline agents
 python run.py --demo random --seed 42 --no-show
 
+# Role-based coordination (3 humans: WORKER + DECOY + RUNNER)
+python run.py --human-count 3 --human-class role --mission-count 3 --no-show
+
 # World-only view (no knowledge panels)
 python run.py --demo rule --style world --no-show --seed 42
 
 # Alien-favoured map (more vents), player-favoured (more hiding spots)
 python run.py --alpha 0.8 --seed 42 --no-show
 python run.py --alpha -0.5 --seed 42 --no-show
+
+# Ensure minimum spawn distance between human and alien
+python run.py --min-start-distance 20 --seed 42 --no-show
 
 # Print map to terminal
 python map_generator.py 42
@@ -39,18 +45,18 @@ python map_generator.py 42 --visualize
 python run.py --demo rule --no-show --output output/verify.gif && echo "OK"
 ```
 
-Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps`, `--fps`, `--noise-radius`, `--human-view`, `--alien-fov`, `--knowledge {on,off}`, `--style {full,world}`, `--no-render`, `--no-show`.
+Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps`, `--fps`, `--noise-radius`, `--human-view`, `--alien-fov`, `--knowledge {on,off}`, `--style {full,world}`, `--no-render`, `--no-show`, `--random-map`, `--min-start-distance`, `--human-count`, `--human-class {human,role,random}`, `--alien-count`, `--alien-class {alien,random}`, `--mission-count`, `--mission-steps`.
 
 ## Architecture
 
 ### Coordinate convention
 
-**All positions are `(y, x)` / `(row, col)`** throughout. This applies to agents, the simulation, and all internal pathfinding. The simulation no longer needs coordinate conversion between agent types.
+**All positions are `(y, x)` / `(row, col)`** throughout agents, simulation, and pathfinding.
 
 ### Tile IDs
 
 ```plaintext
-0=WALL  1=FLOOR  2=VENT  3=HIDE  4=PLAYER_START  5=ALIEN_START  6=EXIT
+0=WALL  1=FLOOR  2=VENT  3=HIDE  4=PLAYER_START  5=ALIEN_START  6=EXIT  7=MISSION
 ```
 
 `PASSABLE_ALIEN = {1,2,4,5,6}` — aliens cannot enter HIDE tiles normally.
@@ -59,20 +65,19 @@ Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps`, `
 ### Agent hierarchy (`agents/`)
 
 ```plaintext
-BaseAgent (ABC)           agents/base.py   pos:(y,x), direction, view_length, step(), reset()
-├── BaseAlienAgent                         + grid
-│   ├── AlienAgent        agents/alien.py  FSM + A* + BeliefMap + KnowledgeMap
-│   └── RandomAlienAgent  agents/random_alien.py
-└── BaseHumanAgent                         + hidden, observe()
-    ├── HumanAgent        agents/human.py  BFS navigation, radar-reactive
-    └── RandomHumanAgent  agents/random_human.py
+BaseAgent (ABC)               agents/base.py   pos:(y,x), direction, view_length, step(), reset()
+├── BaseAlienAgent                                   + grid
+│   ├── AlienAgent            agents/rule_alien.py  FSM + A* + BeliefMap + KnowledgeMap
+│   └── RandomAlienAgent      agents/random_alien.py
+└── BaseHumanAgent                                   + hidden, observe()
+    ├── HumanAgent            agents/rule_human.py  BFS navigation, radar-reactive, no coordination
+    ├── RoleHumanAgent        agents/role_human.py  role-aware, coord bus, WORKER/DECOY/RUNNER
+    └── RandomHumanAgent      agents/random_human.py
 ```
 
-`Direction`, `cone_fov()`, and `direction_from_delta()` live in `agents/base.py` and are shared by all agents.
+`Direction`, `cone_fov()`, `TeamRole`, and `direction_from_delta()` live in `agents/base.py`.
 
-**Interface contract**: every agent exposes `step(player_pos, heard_pos, step_num) → (y,x)`. Human agents additionally have `observe(obs, radar_threat, radar_dist)` which the simulation calls before `step()` each turn.
-
-**FOV**: both agents use the same directional forward `cone_fov()` — wall/hide-blocked via Bresenham line-of-sight. There is no FOV asymmetry between them.
+**Interface contract**: every agent exposes `step(player_pos, heard_pos, step_num) → (y,x)`. Human agents additionally have `observe(obs, radar_threat, radar_dist)` called before `step()` each turn.
 
 **Adding a new agent**: subclass `BaseAlienAgent` or `BaseHumanAgent`, implement `step()` (and `observe()` for humans), then wrap with `build_agent_spec(label, role, agent)` from `simulation.py`.
 
@@ -80,40 +85,64 @@ BaseAgent (ABC)           agents/base.py   pos:(y,x), direction, view_length, st
 
 - **SEARCH**: explores unknown frontiers, falls back to patrol waypoints
 - **INVESTIGATE**: moves to last known / last heard position
-- **HUNT** (speed=2): pursues visible player; `player_known_hiding=True` unlocks `PASSABLE_ALIEN_RUSH` so it can enter hiding spots
+- **HUNT** (speed=2): pursues visible player; `player_known_hiding=True` unlocks `PASSABLE_ALIEN_RUSH`
 
-Transition to HUNT-with-hiding only fires if the alien was **already in HUNT** when it sees `player_hiding=True`. A wandering alien cannot detect a player already inside a hide spot.
+Transition to HUNT-with-hiding only fires if the alien was **already in HUNT** when it sees `player_hiding=True`. A wandering alien cannot detect a player inside a hide spot.
 
-`_move_one()` always replans when in HUNT to prevent the 2-cell overshoot ("tunneling") bug in narrow corridors.
+`_move_one()` always replans in HUNT to prevent the 2-cell overshoot ("tunneling") bug. Vent teleportation triggers only when savings exceed `VENT_ROUTE_MIN_SAVINGS = 4` steps and sound distance exceeds `VENT_ROUTE_MIN_SOUND_DISTANCE = 8`.
 
-Vent teleportation triggers only when the savings exceed `VENT_ROUTE_MIN_SAVINGS = 4` steps and the heard-position distance exceeds `VENT_ROUTE_MIN_SOUND_DISTANCE = 8`.
+### Role-based coordination (`agents/role_human.py`, `agents/role_manager.py`, `agents/coord_bus.py`)
+
+`RoleHumanAgent` extends `BaseHumanAgent` with team coordination:
+
+- **TeamRole** enum (in `agents/base.py`): `WORKER`, `DECOY`, `RUNNER`, `NONE`
+  - **WORKER**: navigates to nearest uncompleted mission tile
+  - **DECOY**: repositions to draw alien away from missions; emits `made_loud_noise` when threat is NEAR/FAR
+  - **RUNNER**: stages near exit and escapes when threat drops to FAR; never completes missions
+- **Coord bus** (`agents/coord_bus.py`): `CoordMessage` with `CoordType.MISSION`, `MISSION_DONE`, or `EXIT`. Role-aware agents call `flush_outbox()` / `receive_coords()` each step; the simulation relays messages between teammates.
+- **Greedy assignment** (`agents/role_manager.py`): `assign_worker_greedy`, `assign_decoy_farthest`, `assign_runner_greedy` mutate `agent.team_role` on matching agent specs. Assignment is event-driven (mission discovered/completed, worker captured, exit unlocked).
+
+All roles share the survival priority: hiding overrides role-specific tasks when radar threat is CRITICAL or CLOSE. After all missions complete, all roles converge to exit-seeking.
+
+### Mission system (`simulation.py`)
+
+Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-count`). A human must stand on a mission tile for `--mission-steps` consecutive steps (minimum 20) to complete it. The exit is **locked** until all missions are completed. The simulation tracks dwell progress in `_mission_dwell_progress` and notifies role-aware agents via coord messages when a mission completes.
 
 ### Simulation loop (`simulation.py`)
 
-`GenericMapSimulation.run()` processes agents in list order (human first, then alien) each step:
+`GenericMapSimulation.run()` processes agents in list order (humans first, then aliens) each step:
 
 1. Update radar
 2. For each agent: build cone observation → call `observe()` (humans) → call `step()`
-3. For the alien specifically: `nearest_target` always uses the human's **actual** position (not censored when hiding) — the alien's own `cone_fov` + `player_hiding` flag handles visibility correctly
+3. Relay coord messages between role-aware human agents
+4. Update mission dwell progress; fire `MISSION_DONE` events and trigger role reassignment
+5. Alien `nearest_target` always uses the human's **actual** position — the alien's own `cone_fov` + `player_hiding` flag handles visibility correctly
 
-Key mechanics (active when `enable_mechanics=True`; disabled automatically for `--demo random`):
+Key mechanics (active when `enable_mechanics=True`; disabled for `--demo random`):
 
-- **Radar**: topology-aware BFS distance → CRITICAL/CLOSE/NEAR/FAR ping every `radar_interval` steps
-- **Noise**: player emits a jittered sound position each step with probability `p_noise`; suppressed when hiding; offset controlled by `noise_radius`
-- **Cone FOV**: both agents use `cone_fov()` — directional, wall/hide-blocked LoS via Bresenham
+- **Radar**: topology-aware BFS distance → CRITICAL/CLOSE/NEAR/FAR every `radar_interval` steps
+- **Noise**: player emits a jittered sound position each step with `p_noise` probability; suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
+- **Cone FOV**: both agent types use `cone_fov()` — directional, wall/hide-blocked LoS via Bresenham
 
 ### Visualization (`simulation.py` render)
 
-`SimulationFrame` captures per-step: agent positions, `fov` (frozenset), `visible_opponent`, radar threat, noise ripple position, alien heard position.
+`SimulationFrame` captures per-step: agent positions, team roles, `fov`, `visible_opponent`, radar threat, noise ripple (with `noise_deliberate` flag), shared mission/exit coords, mission completion events.
 
-Render produces a 3-panel GIF: **World** | **human_1 knowledge** | **alien_1 knowledge**. Knowledge panels show: explored tiles (cone-LoS accurate), FOV overlay (faint tint), visible-opponent marker, agent's own position marker.
-
-`GenericKnowledge.update_from_observation()` only stores values `>= 0` to prevent radar/noise marker values (negative) from leaking into the visual colormap.
+Render produces a multi-panel GIF: **World** panel + per-agent knowledge panels. `--style world` suppresses knowledge panels. Role labels (WORKER/DECOY/RUNNER) are shown on agent markers in the world panel.
 
 ### Map generator (`map_generator.py`)
 
-`MapGenerator(width, height, alpha, seed)` — `alpha ∈ [-1, 1]` shifts balance: negative = more HIDE tiles, positive = more VENT tiles. Visualization helpers (`visualise_map`, `run_demo`, etc.) are defined in the same file. The `__main__` block supports `--visualize` to save PNGs. Pre-generated maps are cached as JSON in `maps/`.
+`MapGenerator(width, height, alpha, seed)` — `alpha ∈ [-1, 1]`: negative = more HIDE tiles, positive = more VENT tiles. Pre-generated maps cached as JSON in `maps/`.
 
 ### Training (`training/`)
 
-**Broken — do not use.** All training files (`train_aet.py`, `train_staged.py`, etc.) import from `training/envs.py`, which in turn does `from game import Game` — a module that no longer exists. The RL observation space (128-float vector, 5 discrete actions) and `stable-baselines3` PPO setup are defined in `training/envs.py` for reference, but none of it runs.
+**Partially broken.** `training/envs.py` (`BaseAETEnv`, `AlienEnv`, `PlayerEnv`) imports `from game import Game` — a module that no longer exists — so the gymnasium environments do not run. The obs/reward logic in `training/obs_rewards.py` is intact and importable. `evaluate_rule_agents.py` also imports `from game import Game` and is broken for the same reason.
+
+The staged training design (`train_staged.py`) targets a 4-phase PPO curriculum:
+
+1. Human vs rule-based alien until >20% escape rate
+2. Alien vs rule-based human until >30% catch rate
+3. Both vs historical checkpoint pools
+4. Full AET co-training
+
+The observation space is a 128-float vector; action space is 6 discrete actions (WAIT + 4 walks + LOUD_NOISE).

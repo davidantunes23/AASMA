@@ -19,9 +19,9 @@ if str(ROOT) not in sys.path:
 import numpy as np
 from stable_baselines3 import PPO
 
-from agents.alien import AlienAgent, compute_fov
-from agents.human import Direction as HumanDirection
-from agents.human import HumanAgent
+from agents.rule_alien import AlienAgent, compute_fov
+from agents.rule_human import Direction as HumanDirection
+from agents.rule_human import HumanAgent
 from game import Game
 from map_generator import MapGenerator, Tile
 from simulate_game import FrameState, find_tile_pos, visualize, visualize_world_only

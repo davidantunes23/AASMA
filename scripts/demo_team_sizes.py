@@ -23,7 +23,7 @@ if REPO_ROOT not in sys.path:
 from map_generator import MapGenerator, Tile
 from simulation import GenericMapSimulation, build_agent_spec
 from agents.role_human import RoleHumanAgent
-from agents.alien import AlienAgent
+from agents.rule_alien import AlienAgent
 from agents.base import Direction
 
 OUT_DIR = "output"

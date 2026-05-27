@@ -117,7 +117,7 @@ def build_agents(
             from agents.base import Direction
             return RoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
         # default: rule-based HumanAgent
-        from agents.human import HumanAgent
+        from agents.rule_human import HumanAgent
         from agents.base import Direction
         return HumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
 
@@ -126,7 +126,7 @@ def build_agents(
         if alien_class == "random" or demo == "random":
             from agents.random_alien import RandomAlienAgent
             return RandomAlienAgent(grid=grid.copy(), pos=alien_start, rng=random.Random(seed + 100 + ix))
-        from agents.alien import AlienAgent
+        from agents.rule_alien import AlienAgent
         return AlienAgent(grid=grid.copy(), start_pos=alien_start)
 
     # Create requested human agents

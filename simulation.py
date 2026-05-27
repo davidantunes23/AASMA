@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from pathlib import Path
 from collections import deque
 from dataclasses import dataclass, field
@@ -16,7 +15,7 @@ from matplotlib.colors import ListedColormap
 from matplotlib.markers import MarkerStyle
 
 from agents.base import Direction, cone_fov, TeamRole
-from agents.alien import AlienState
+from agents.rule_alien import AlienState
 from agents.coord_bus import CoordMessage, CoordType
 from agents.role_manager import (
     assign_worker_greedy,
@@ -245,7 +244,9 @@ class GenericMapSimulation:
         self._mission_dwell_progress: dict[tuple[int, int], int] = {}
 
         # Debug log for role/mission reassignment decisions.
-        self.debug_log_path = Path(tempfile.gettempdir()) / f"aasma_role_debug_{os.getpid()}_{uuid4().hex}.log"
+        _log_dir = Path(__file__).resolve().parent / "output" / "logs"
+        _log_dir.mkdir(parents=True, exist_ok=True)
+        self.debug_log_path = _log_dir / f"aasma_role_debug_{os.getpid()}_{uuid4().hex}.log"
         self.debug_log_path.write_text("", encoding="utf-8")
         self._debug_log(f"init: role_based={self.role_based}, knowledge_mode={self.knowledge_mode}, debug_log={self.debug_log_path}")
         self._debug_log(f"mission_steps_required={self.mission_steps_required}")
@@ -1032,6 +1033,38 @@ class GenericMapSimulation:
             for mission_pos in mission_positions_touched:
                 self._complete_mission_at(mission_pos)
 
+            # Debug: log hidden humans and idle mission tiles every step.
+            active_human_specs = [
+                s for s in self.agents
+                if s.role == "human"
+                and s.label not in captured_humans
+                and s.label not in escaped_humans
+            ]
+            for spec in active_human_specs:
+                if bool(getattr(spec.agent, "hidden", False)):
+                    self._debug_log(
+                        f"agent_hidden: step={step}, label={spec.label},"
+                        f" pos={self._get_position(spec)},"
+                        f" role={self._role_name(getattr(spec.agent, 'team_role', None))},"
+                        f" radar={getattr(spec.agent, 'last_radar_threat', None)}"
+                    )
+            for pos in sorted(self.known_missions):
+                if pos not in mission_positions_touched:
+                    progress = self._mission_dwell_progress.get(pos, 0)
+                    nearest_label = None
+                    nearest_dist = None
+                    for spec in active_human_specs:
+                        p = self._get_position(spec)
+                        d = abs(p[0] - pos[0]) + abs(p[1] - pos[1])
+                        if nearest_dist is None or d < nearest_dist:
+                            nearest_dist = d
+                            nearest_label = spec.label
+                    self._debug_log(
+                        f"mission_idle: step={step}, pos={pos},"
+                        f" progress={progress}/{self.mission_steps_required},"
+                        f" nearest={nearest_label}(dist={nearest_dist})"
+                    )
+
             # Mark any humans who collided with aliens after human movement.
             post_human_agents = self._snapshot_agents()
             newly_captured = self._captured_human_labels(post_human_agents, captured_humans | escaped_humans)
@@ -1401,13 +1434,27 @@ class GenericMapSimulation:
             artist.set_paths([path])
 
         n_panels = 1 + len(frames[0].agents)
-        fig_size = (16, 5) if has_single_pair else (max(16, 5 * n_panels), 5)
-        fig, axes = plt.subplots(1, n_panels, figsize=fig_size, dpi=120)
-        fig.patch.set_facecolor("#000000")
-        if n_panels == 1:
-            axes = [axes]
+        use_grid = n_panels > 3
+        if use_grid:
+            fig, axes_2d = plt.subplots(2, 3, figsize=(18, 10), dpi=120)
+            fig.patch.set_facecolor("#000000")
+            axes_flat = list(axes_2d.flat)
+            # hide any empty content slots between the last agent panel and the debug slot
+            for ax in axes_flat[n_panels:5]:
+                ax.set_visible(False)
+            debug_ax = axes_flat[5]
+            debug_ax.set_facecolor("#0f0f1e")
+            debug_ax.axis("off")
+        else:
+            fig_size = (16, 5) if has_single_pair else (max(16, 5 * n_panels), 5)
+            fig, axes = plt.subplots(1, n_panels, figsize=fig_size, dpi=120)
+            fig.patch.set_facecolor("#000000")
+            if n_panels == 1:
+                axes = [axes]
+            axes_flat = list(axes)
+            debug_ax = None
 
-        world_ax = axes[0]
+        world_ax = axes_flat[0]
         initial_grid = frames[0].grid_snapshot if frames[0].grid_snapshot is not None else self.grid
         world_image = world_ax.imshow(initial_grid, cmap=world_cmap, vmin=0, vmax=7)
         world_ax.autoscale(False)  # prevent large Circle patches from shrinking the map
@@ -1438,7 +1485,7 @@ class GenericMapSimulation:
                                      linewidths=2.0, marker="o", zorder=4)
                 )
 
-        knowledge_axes = axes[1:]
+        knowledge_axes = axes_flat[1:n_panels]
         knowledge_images = []
         knowledge_markers = []
         fov_overlays = []     # semi-transparent FOV highlight per panel
@@ -1519,11 +1566,19 @@ class GenericMapSimulation:
         legend_text = None
         shared_text = None
         if has_role_agents:
-            legend_text = fig.text(0.985, 0.92, self._role_legend_text(),
-                                   color="white", fontsize=10, ha="right",
-                                   va="top", fontfamily="monospace")
-            shared_text = fig.text(0.985, 0.65, "", color="white", fontsize=9,
-                                   ha="right", va="top", fontfamily="monospace")
+            if use_grid:
+                legend_text = debug_ax.text(0.05, 0.97, self._role_legend_text(),
+                                            color="white", fontsize=10, ha="left", va="top",
+                                            fontfamily="monospace", transform=debug_ax.transAxes)
+                shared_text = debug_ax.text(0.05, 0.62, "", color="white", fontsize=9,
+                                            ha="left", va="top", fontfamily="monospace",
+                                            transform=debug_ax.transAxes)
+            else:
+                legend_text = fig.text(0.985, 0.92, self._role_legend_text(),
+                                       color="white", fontsize=10, ha="right",
+                                       va="top", fontfamily="monospace")
+                shared_text = fig.text(0.985, 0.65, "", color="white", fontsize=9,
+                                       ha="right", va="top", fontfamily="monospace")
 
         def update_full(frame_index: int):
             state = frames[frame_index]

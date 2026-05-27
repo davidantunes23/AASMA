@@ -65,9 +65,8 @@ class RoleHumanAgent(BaseHumanAgent):
         radar_threat: str | None = None,
         radar_dist:   int | None = None,
     ) -> None:
-        if radar_threat is not None:
-            self.last_radar_threat = radar_threat
-            self.last_radar_dist   = radar_dist
+        self.last_radar_threat = radar_threat
+        self.last_radar_dist   = radar_dist
         self._init_memory(obs)
         self._integrate_observation(obs)
 
@@ -561,6 +560,8 @@ class RoleHumanAgent(BaseHumanAgent):
             for x in range(W):
                 if not self._is_traversable_known((y, x)):
                     continue
+                if self._tile_at((y, x)) == int(Tile.HIDE):
+                    continue
                 min_d = min(
                     abs(y - my) + abs(x - mx)
                     for my, mx in self.mission_positions
@@ -612,6 +613,14 @@ class RoleHumanAgent(BaseHumanAgent):
                         return self.pos
                 return self.pos
             nxt = self._step_toward_exit_area()
+            if nxt is None or nxt == self.pos:
+                # Can't reach exit area through known map — explore to fill gaps.
+                nxt = (
+                    self._adjacent_unknown_step()
+                    or self._next_step_to_nearest_floor_frontier()
+                    or self._next_step_to_nearest_frontier()
+                    or self._best_local_move()
+                )
             if nxt is not None and nxt != self.pos:
                 self.direction = self._direction_from_step(self.pos, nxt)
                 self.pos       = nxt
