@@ -285,6 +285,18 @@ class GenericMapSimulation:
             )
         )
 
+        # Wire a shared belief map for cooperative agents (duck-typed: any agent
+        # that exposes a `shared_map` attribute participates).
+        coop_agents = [
+            spec.agent for spec in self.agents
+            if spec.role == "human" and hasattr(spec.agent, "shared_map")
+        ]
+        if len(coop_agents) > 1:
+            from agents.shared_belief import SharedBeliefMap
+            sbm = SharedBeliefMap(self.grid.shape)
+            for agent in coop_agents:
+                agent.shared_map = sbm
+
     def _debug_log(self, message: str) -> None:
         try:
             with self.debug_log_path.open("a", encoding="utf-8") as handle:
