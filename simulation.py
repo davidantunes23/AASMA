@@ -824,11 +824,15 @@ class GenericMapSimulation:
         def all_captured() -> bool:
             return bool(all_human_labels) and len(captured_humans) >= len(all_human_labels)
 
+        def alive_humans_at_exit(agents: list[AgentFrame]) -> bool:
+            alive_humans = [a for a in agents if a.role == "human" and a.label not in captured_humans]
+            return bool(alive_humans) and all(a.position == exit_pos for a in alive_humans)
+
         for step in range(max_steps + 1):
             exit_open = self._update_exit_open_state()
             current_agents = self._snapshot_agents()
             outcome = None
-            if exit_open and exit_pos is not None and all(a.position == exit_pos for a in current_agents if a.role == "human"):
+            if exit_open and exit_pos is not None and alive_humans_at_exit(current_agents):
                 outcome = "human_reached_exit_all"
             if outcome is None:
                 outcome = "alien_caught_all_humans" if all_captured() and len(all_human_labels) > 1 else "alien_caught_human" if all_captured() else None
@@ -1149,8 +1153,7 @@ class GenericMapSimulation:
             # Game ends when all humans reach the exit tile, or if everyone is caught.
             if exit_open and exit_pos is not None:
                 updated_agents = self._snapshot_agents()
-                humans = [a for a in updated_agents if a.role == "human"]
-                if humans and all(a.position == exit_pos for a in humans):
+                if alive_humans_at_exit(updated_agents):
                     frames.append(SimulationFrame(
                         step=step + 1,
                         outcome="human_reached_exit_all",
