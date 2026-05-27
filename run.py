@@ -184,6 +184,7 @@ def main():
         mission_steps=args.mission_steps,
     )
     simulation.mission_tile_values = {int(Tile.MISSION)}
+    print(f"Role debug log: {simulation.debug_log_path}")
 
     frames, outcome = simulation.run(max_steps=args.max_steps)
     print(f"Outcome: {outcome}  ({len(frames) - 1} steps)")

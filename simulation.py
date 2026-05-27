@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import os
+import tempfile
+from pathlib import Path
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, Literal, Optional, Sequence
+from uuid import uuid4
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -75,6 +78,7 @@ class SimulationFrame:
     shared_exit: tuple[int, int] | None = None
     captured_humans: list[str] | None = None
     mission_done_events: list[tuple[tuple[int, int], int]] | None = None
+    agent_roles: dict[int, str] | None = None
 
 
 THREAT_COLORS = {
@@ -228,6 +232,12 @@ class GenericMapSimulation:
         self.shared_exit_coord: tuple[int, int] | None = None
         self.completed_mission_events: list[tuple[tuple[int, int], int]] = []
         self._active_frame: SimulationFrame | None = None
+        self._last_role_by_agent_id: dict[int, str] = {}
+
+        # Debug log for role/mission reassignment decisions.
+        self.debug_log_path = Path(tempfile.gettempdir()) / f"aasma_role_debug_{os.getpid()}_{uuid4().hex}.log"
+        self.debug_log_path.write_text("", encoding="utf-8")
+        self._debug_log(f"init: role_based={self.role_based}, knowledge_mode={self.knowledge_mode}, debug_log={self.debug_log_path}")
 
         self.mission_manager = mission_manager
         if self.mission_manager is None and mission_steps is not None and mission_steps > 0:
@@ -256,6 +266,43 @@ class GenericMapSimulation:
                 if getattr(spec.agent, "agent_id", -1) < 0:
                     setattr(spec.agent, "agent_id", human_idx)
                 human_idx += 1
+        self._debug_log(
+            "agent_ids: " + ", ".join(
+                f"{spec.label}=id{getattr(spec.agent, 'agent_id', '?')}:role={getattr(spec.agent, 'team_role', None)}"
+                for spec in self.agents if spec.role == "human"
+            )
+        )
+
+    def _debug_log(self, message: str) -> None:
+        try:
+            with self.debug_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(message.rstrip() + "\n")
+        except Exception:
+            pass
+
+    @staticmethod
+    def _role_name(role: TeamRole | None) -> str:
+        if role is None:
+            return "NONE"
+        try:
+            return role.name
+        except Exception:
+            return str(role)
+
+    def _track_role_changes(self, agents: list[AgentFrame], step_tag: str) -> dict[int, str]:
+        current_roles: dict[int, str] = {}
+        for agent in agents:
+            if agent.role != "human" or agent.agent_id is None:
+                continue
+            current_role = self._role_name(agent.team_role)
+            current_roles[int(agent.agent_id)] = current_role
+            previous_role = self._last_role_by_agent_id.get(int(agent.agent_id))
+            if previous_role != current_role:
+                self._debug_log(
+                    f"role_change: step={step_tag}, id={int(agent.agent_id)}, label={agent.label}, {previous_role or 'NONE'} -> {current_role}"
+                )
+        self._last_role_by_agent_id = current_roles.copy()
+        return current_roles
 
     # ── Position helpers ──────────────────────────────────────────────────────
 
@@ -407,12 +454,18 @@ class GenericMapSimulation:
         if position not in self.known_missions:
             self.known_missions.add(position)
             self.pending_missions.add(position)
+            self._debug_log(
+                f"add_mission: pos={position}, known={sorted(self.known_missions)}, pending={sorted(self.pending_missions)}"
+            )
             self._maybe_reassign_roles(new_mission=True)
 
     def complete_mission(self, position: tuple[int, int]) -> None:
         """Mark a mission complete and trigger reassignment."""
         self.known_missions.discard(position)
         self.pending_missions.discard(position)
+        self._debug_log(
+            f"complete_mission: pos={position}, known={sorted(self.known_missions)}, pending={sorted(self.pending_missions)}"
+        )
         self._maybe_reassign_roles(mission_completed=True)
 
     def _locked_worker_labels(self) -> set[str]:
@@ -448,10 +501,16 @@ class GenericMapSimulation:
         """
         # Respect role-based toggle
         if not self.role_based:
+            self._debug_log(
+                f"reassign_skip: role_based=False trigger={{new_mission={new_mission}, mission_completed={mission_completed}, worker_died={worker_died}, exit_opened={exit_opened}}}"
+            )
             return
 
         # If there are no pending missions and no explicit trigger, skip
         if not self.pending_missions and not (new_mission or mission_completed or worker_died or exit_opened):
+            self._debug_log(
+                f"reassign_skip: no_pending_and_no_trigger trigger={{new_mission={new_mission}, mission_completed={mission_completed}, worker_died={worker_died}, exit_opened={exit_opened}}}"
+            )
             return
 
         locked = self._locked_worker_labels()
@@ -459,44 +518,65 @@ class GenericMapSimulation:
             s for s in self.agents
             if s.role == "human" and getattr(s, "label", "") not in self.captured_humans
         ]
-        free_specs = [s for s in human_specs if getattr(s, "label", "") not in locked]
+        assignable_specs = [s for s in human_specs if getattr(s, "label", "") not in locked]
+        current_workers = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.WORKER]
+        current_decoys = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.DECOY]
+        current_runners = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.RUNNER]
 
-        if not free_specs:
-            # nothing to reassign now — keep pending missions in queue
-            return
+        self._debug_log(
+            "reassign_start: "
+            f"trigger={{new_mission={new_mission}, mission_completed={mission_completed}, worker_died={worker_died}, exit_opened={exit_opened}}}, "
+            f"known={sorted(self.known_missions)}, pending={sorted(self.pending_missions)}, "
+            f"locked={sorted(locked)}, assignable={[s.label for s in assignable_specs]}, "
+            f"workers={[s.label for s in current_workers]}, decoys={[s.label for s in current_decoys]}, runners={[s.label for s in current_runners]}, "
+            f"roles_before={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
+        )
 
-        # Reset the free pool before reassigning so stale roles do not stick
-        # around after missions are discovered, completed, or lost.
-        clear_roles(free_specs)
-
-        # Assign workers among free agents only
-        # Convert pending_missions to list for role manager
         missions = list(self.pending_missions) if self.pending_missions else list(self.known_missions)
         if not missions:
+            self._debug_log("reassign_skip: no_missions_to_assign")
             return
 
-        # First, attempt to promote a worker among free agents
-        worker_label = assign_worker_greedy(free_specs, missions)
-        # If successful, remove that mission from pending (we assume one worker will claim nearest mission)
-        if worker_label is not None:
-            # find that agent and approximate their targeted mission as the closest mission
-            promoted = next((s for s in free_specs if getattr(s, "label", None) == worker_label), None)
+        # Reassign all non-locked roles from scratch, but preserve locked workers.
+        self._debug_log(
+            f"clear_roles: before={[(s.label, getattr(s.agent, 'team_role', None)) for s in assignable_specs]}"
+        )
+        clear_roles(assignable_specs)
+        self._debug_log(
+            f"clear_roles: after={[(s.label, getattr(s.agent, 'team_role', None)) for s in assignable_specs]}"
+        )
+
+        target_worker_count = min(len(missions), len(human_specs))
+        worker_label = None
+        assigned_workers = len(locked)
+        remaining_specs = list(assignable_specs)
+        while assigned_workers < target_worker_count and remaining_specs:
+            chosen_label = assign_worker_greedy(remaining_specs, missions)
+            self._debug_log(f"assign_worker_greedy: chosen={chosen_label}")
+            if chosen_label is None:
+                break
+            worker_label = chosen_label
+            assigned_workers += 1
+            promoted = next((s for s in remaining_specs if getattr(s, "label", None) == chosen_label), None)
             if promoted is not None:
                 pos = getattr(promoted.agent, "pos", None)
                 if pos is not None:
-                    # remove the nearest mission from pending to avoid double-assign
                     nearest = self._nearest_target(pos, missions)
                     if nearest is not None and nearest in self.pending_missions:
                         self.pending_missions.discard(nearest)
+            remaining_specs = [s for s in remaining_specs if getattr(s, "label", None) != chosen_label]
 
-        # Next, assign a DECOY among remaining free agents (excluding newly promoted worker)
-        remaining_free = [s for s in free_specs if getattr(s.agent, "team_role", None) != TeamRole.WORKER]
-        decoy_label = assign_decoy_farthest(remaining_free, missions)
+        decoy_label = assign_decoy_farthest(remaining_specs, missions) if remaining_specs else None
+        self._debug_log(f"assign_decoy_farthest: chosen={decoy_label}")
+        remaining_specs = [s for s in remaining_specs if getattr(s, "label", None) != decoy_label]
 
-        # Finally, pick a RUNNER for exit behavior among remaining free agents
         exit_pos = self._exit_position()
-        remaining_free_after = [s for s in remaining_free if getattr(s.agent, "team_role", None) not in (TeamRole.WORKER, TeamRole.DECOY)]
-        runner_label = assign_runner_greedy(remaining_free_after, exit_pos, None)
+        runner_label = assign_runner_greedy(remaining_specs, exit_pos, None) if remaining_specs else None
+        self._debug_log(f"assign_runner_greedy: chosen={runner_label}, exit_pos={exit_pos}")
+
+        self._debug_log(
+            f"reassign_done: roles_after={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
+        )
 
     # ── Role configuration API ──────────────────────────────────────────────
     def enable_role_based(self, enabled: bool) -> None:
@@ -680,6 +760,7 @@ class GenericMapSimulation:
             if self._get_position(spec) == position:
                 completer_id = getattr(spec.agent, "agent_id", None)
                 break
+        self._debug_log(f"mission_complete_start: pos={position}, completer_id={completer_id}")
         self.grid[position] = int(Tile.FLOOR)
         if self.knowledge_mode == "on":
             for km in self.knowledge.values():
@@ -707,6 +788,9 @@ class GenericMapSimulation:
             completer_id = -1
         event = (position, int(completer_id))
         self.completed_mission_events.append(event)
+        self._debug_log(
+            f"mission_complete_done: pos={position}, completer_id={completer_id}, completed_events={self.completed_mission_events}"
+        )
         if self._active_frame is not None:
             if self._active_frame.mission_done_events is None:
                 self._active_frame.mission_done_events = []
@@ -769,6 +853,7 @@ class GenericMapSimulation:
                 shared_exit=self.shared_exit_coord,
                 captured_humans=sorted(captured_humans),
                 mission_done_events=list(self.completed_mission_events),
+                agent_roles=self._track_role_changes(current_agents, f"{step}:pre"),
             ))
             self._active_frame = frames[-1]
             if outcome is not None or step == max_steps:
@@ -1049,6 +1134,7 @@ class GenericMapSimulation:
                     shared_exit=self.shared_exit_coord,
                     captured_humans=sorted(captured_humans),
                     mission_done_events=list(self.completed_mission_events),
+                    agent_roles=self._track_role_changes(final_agents, f"{step+1}:caught"),
                 ))
                 self._active_frame = None
                 return frames, outcome
@@ -1077,6 +1163,7 @@ class GenericMapSimulation:
                         shared_exit=self.shared_exit_coord,
                         captured_humans=sorted(captured_humans),
                         mission_done_events=list(self.completed_mission_events),
+                        agent_roles=self._track_role_changes(updated_agents, f"{step+1}:exit"),
                     ))
                     self._active_frame = None
                     return frames, "human_reached_exit_all"
@@ -1221,7 +1308,7 @@ class GenericMapSimulation:
                     human_agents = [a for a in state.agents if a.role == "human"]
                     for txt, agent in zip(label_texts, human_agents):
                         aid = agent.agent_id if getattr(agent, "agent_id", None) is not None else "?"
-                        role_name = agent.team_role.name if agent.team_role is not None else "NONE"
+                        role_name = state.agent_roles.get(int(aid), self._role_name(agent.team_role)) if state.agent_roles else self._role_name(agent.team_role)
                         txt.set_position((agent.position[1] + 0.3, agent.position[0]))
                         txt.set_text(f"id{aid}: {role_name}")
                         txt.set_visible(agent.label not in captured)
@@ -1270,6 +1357,7 @@ class GenericMapSimulation:
                 status_text.set_text(
                     f"Step {state.step:4d}/{len(frames)-1:4d}"
                     f"  |  Human: {human_mode:<10}"
+                    f"  |  {self._format_human_roles(state)}"
                     f"  Alien: {alien_mode:<11}"
                     f"  Exit: {exit_state:<9}"
                     f"  |  {outcome}"
@@ -1351,8 +1439,7 @@ class GenericMapSimulation:
             # Show agent label with id and team role when available
             if agent.role == "human":
                 aid = agent.agent_id if getattr(agent, "agent_id", None) is not None else "?"
-                role_name = agent.team_role.name if agent.team_role is not None else agent.role
-                axis.set_title(f"{agent.label} (id{aid}: {role_name})", color="white", fontsize=11, fontweight="bold")
+                axis.set_title(f"{agent.label} (id{aid})", color="white", fontsize=11, fontweight="bold")
             else:
                 axis.set_title(f"{agent.label} ({agent.role})", color="white", fontsize=11, fontweight="bold")
             axis.set_xticks([])
@@ -1528,6 +1615,7 @@ class GenericMapSimulation:
             status_text.set_text(
                 f"Step {state.step:4d}/{len(frames)-1:4d}"
                 f"  |  Human: {human_mode:<10}"
+                f"  |  {self._format_human_roles(state)}"
                 f"  Alien: {alien_mode:<11}"
                 f"  Exit: {exit_state:<9}"
                 f"  |  {outcome}"
@@ -1602,6 +1690,11 @@ class GenericMapSimulation:
                 lines.append(f"... +{len(missions) - len(shown)}")
         else:
             lines.append("MISSIONS: --")
+        role_items = state.agent_roles or {}
+        if role_items:
+            lines.append("ROLES:")
+            for agent_id, role_name in sorted(role_items.items()):
+                lines.append(f"- id{agent_id}: {role_name}")
         done_events = state.mission_done_events or []
         if done_events:
             lines.append("DONE:")
@@ -1613,6 +1706,21 @@ class GenericMapSimulation:
         else:
             lines.append("DONE: --")
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_human_roles(state: SimulationFrame) -> str:
+        role_items = state.agent_roles or {}
+        if not role_items:
+            return "Humans: --"
+        label_by_id: dict[int, str] = {}
+        for agent in state.agents:
+            if agent.role == "human" and agent.agent_id is not None:
+                label_by_id[int(agent.agent_id)] = agent.label
+        parts = []
+        for agent_id in sorted(role_items):
+            label = label_by_id.get(agent_id, f"human_{agent_id + 1}")
+            parts.append(f"{label}=id{agent_id}")
+        return "Humans: " + ", ".join(parts)
 
     @staticmethod
     def _maybe_show(fig):
