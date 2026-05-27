@@ -52,8 +52,10 @@ AASMA/
 ├── agents/
 │   ├── alien.py          — rule-based alien (A*, belief map, FSM, vent routing)
 │   ├── human.py          — rule-based human (BFS, hiding, radar-reactive)
-│   ├── random_alien.py   — random alien baseline
-│   └── random_human.py   — random human baseline
+│   ├── role_human.py     — role-aware human (WORKER / DECOY / RUNNER support)
+│   ├── role_manager.py   — greedy role assignment helpers (WORKER/DECOY/RUNNER)
+│   ├── random_alien.py   — random alien baseline (vent teleport + walk)
+│   └── random_human.py   — random human baseline (simple random walk)
 ├── map_generator.py      — procedural map generation + PNG visualization
 ├── simulation.py         — simulation engine (game loop, rendering, GIF output)
 ├── scripts/
@@ -138,46 +140,53 @@ python map_generator.py [seed] --visualize
 
 ## Agents
 
-### Rule-based Alien (`agents/alien.py`)
+There are three principal agent families in the codebase — each useful for different experiments and demonstrations:
 
-A finite-state machine with three states:
+- **Random agents** (`agents/random_human.py`, `agents/random_alien.py`) — very simple baselines that choose random valid moves (and the random alien optionally vents). They are role-unaware and do not participate in coordination or emit deliberate loud-noise. Useful as low-skill baselines and for testing the simulation plumbing.
 
-- **SEARCH** — explores unknown frontiers using A*, falls back to patrol waypoints.
-- **INVESTIGATE** — moves to the last known or last heard position.
-- **HUNT** — player is in FOV; pursues at 2 cells/step.
+- **Rule-based agents (no coordination)** (`agents/human.py`, `agents/alien.py`) — the original game-play agents. The human implements a priority-driven BFS/steering policy (hide, explore, go-to-exit) and responds to radar/noise signals; the alien runs an FSM (SEARCH / INVESTIGATE / HUNT) with belief-tracking and vent routing. These agents operate independently and do not use inter-agent coord messages or team roles.
 
-Additional capabilities: Bayesian belief map over player location, auditory evidence tracking (heard position with jitter), strategic vent teleportation when it saves 4+ steps.
+- **Role-based coordination (first version)** (`agents/role_human.py` + `agents/role_manager.py` + `simulation.py` support) — role-aware humans expose `team_role`, `flush_outbox()` and `receive_coords()` for a simple coord-bus. Agents can publish `CoordMessage` for `EXIT` and `MISSION`; the simulation relays messages to teammates and maintains light shared state (`shared_mission_coords`, `shared_exit_coord`). Role reassignment is event-driven (missions discovered/completed, worker captured, exit opened) and uses greedy assignment helpers. Important: this coordination design shares sparse coordinate messages and assigned roles, not full per-agent knowledge maps — agents keep their own memory and observations.
 
-### Rule-based Human (`agents/human.py`)
+Overview of differences
 
-Priority-ordered decision loop:
+- **Information sharing:** Random and rule-based (no coordination) agents have no teammate messaging. Role-based coordination shares only coordinate messages (not a full shared world view).
+- **Role semantics:** Only role-based agents expose `team_role` (WORKER/DECOY/RUNNER) and the sim performs event-driven reassignment; rule-based agents have no team roles.
+- **Noise / deliberate signals:** All mechanics (radar, ambient noise) exist for rule-based and role-based agents when `enable_mechanics=True`. Role-based agents can also set `made_loud_noise` for deliberate signals that the sim forwards to aliens as an exact heard position.
+- **Use cases:** Use random agents for baselines and plumbing tests; use rule-based (no coordination) for single-agent behaviour and classic evaluations; use role-based coordination when experimenting with simple team strategies, mission allocation, and coordinated distraction/defence behaviours.
 
-1. **Stay hidden** — if currently hiding and threat is CRITICAL or CLOSE, wait.
-2. **Exit** — BFS path to exit once it is known.
-3. **Hide** — seek nearest hiding spot when radar threat is CRITICAL, or CLOSE without a nearby exit.
-4. **Explore** — BFS toward unknown frontier tiles.
-
-### Random Baselines (`agents/random_{alien,human}.py`)
-
-Move to a uniformly random passable neighbour each step. The random alien also teleports through vents when standing on one and another is known. Used for sanity checks and as a lower-performance comparison baseline.
+See `ROLES_README.md` for a developer-oriented explanation of the current coordination implementation and APIs.
 
 ---
 
 ## Simulation Engine (`simulation.py`)
-
-`GenericMapSimulation` runs the game loop and renders output GIFs. It supports any agent that exposes either a `step(player_pos, heard_pos, step_num)` or `_act(obs, radar_threat, radar_dist)` interface.
+`GenericMapSimulation` runs the game loop and renders output GIFs. It supports agents that expose either a `step(player_pos, heard_pos, step_num)` or `_act(obs, radar_threat, radar_dist)` interface.
 
 **Key parameters:**
 
 ```python
 GenericMapSimulation(
-    grid,
-    agents,                  # list of AgentSpec
-    knowledge_mode="on",     # "on" records per-agent knowledge maps for rendering
-    enable_mechanics=True,   # enables radar, noise, cone observation
-    p_noise=0.1,             # probability of sound event per step
-    radar_interval=5,        # steps between radar pings
+        grid,
+        agents,                  # list of AgentSpec
+        knowledge_mode="on",   # record per-agent knowledge maps for rendering
+        enable_mechanics=True,   # enables radar, noise, cone observation
+        p_noise=0.1,             # probability of stochastic sound events per step
+        radar_interval=5,        # steps between radar pings
 )
 ```
 
-When `enable_mechanics=False` (used with random agents), all three mechanics are disabled and agents receive exact positions instead of noisy signals.
+When `enable_mechanics=False` (commonly used with random agents), radar/noise/cone mechanics are disabled and agents receive exact observations.
+
+
+**Coordination & roles
+
+Basic role support exists for role-aware human agents (`WORKER`, `DECOY`, `RUNNER`). Role-aware agents expose coordination hooks (outbox/receive) and may set deliberate loud-noise signals; the simulation performs event-driven reassignment and maintains shared mission/exit coordinates.
+
+For a full developer-oriented description, implementation notes, and API examples, see `ROLES_README.md`.
+Notes & experimental tips
+
+- Role-based reassignment is deterministic given the sim seed and current agent positions; this is helpful for reproducible experiments.
+- If you want fixed roles for ablation studies, call `sim.enable_role_based(False)` and use `sim.set_initial_roles(...)`.
+- Random agents (`RandomHumanAgent`, `RandomAlienAgent`) are role-unaware and will not interact with the coord-bus even if mixed into the sim.
+
+The above replaces the earlier brief summary; see `ROLES_README.md` for an expanded developer-oriented description and implementation notes.
