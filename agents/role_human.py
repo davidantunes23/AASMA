@@ -496,9 +496,9 @@ class RoleHumanAgent(BaseHumanAgent):
         # Decoy can reposition before it arrives.
         # Noise only allowed when NOT hidden — hidden agents cannot make noise.
         if self.last_radar_threat == "NEAR":
-            self.made_loud_noise = not self.hidden
             # Reposition to farthest-from-missions tile regardless of noise,
             # so the alien arrives at an empty spot (decoy-and-dodge pattern).
+            # Only emit loud noise after movement and only if not on a hide tile.
             far_tile = self._farthest_from_missions()
             if far_tile is not None:
                 nxt = self._step_toward_target(far_tile)
@@ -506,14 +506,16 @@ class RoleHumanAgent(BaseHumanAgent):
                     self.direction = self._direction_from_step(self.pos, nxt)
                     self.pos       = nxt
                     self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                    # Emit noise only when not hidden (and not standing on a hide tile).
+                    self.made_loud_noise = not self.hidden and (self._tile_at(self.pos) != int(Tile.HIDE))
                     return self.pos
+            # No movement; still only allow noise if not on a hide tile.
+            self.made_loud_noise = not (self._tile_at(self.pos) == int(Tile.HIDE))
             return self.pos
 
-        # FAR or no threat — reposition silently to attraction zone.
-        # Justification: use the quiet window to get into a good structural
-        # position so the next NEAR trigger happens as far from missions as
-        # possible, maximising the distraction value of the next noise call.
-        self.made_loud_noise = False
+        # FAR or no threat — reposition to attraction zone and optionally
+        # emit a deliberate noise to preemptively draw aliens away. Deliberate
+        # noise is allowed in FAR as well, but not when hidden.
         far_tile = self._farthest_from_missions()
         if far_tile is not None and far_tile != self.pos:
             nxt = self._step_toward_target(far_tile)
@@ -521,7 +523,13 @@ class RoleHumanAgent(BaseHumanAgent):
                 self.direction = self._direction_from_step(self.pos, nxt)
                 self.pos       = nxt
                 self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                # Allow deliberate noise in FAR to be emitted after repositioning
+                self.made_loud_noise = not self.hidden and (self._tile_at(self.pos) != int(Tile.HIDE))
                 return self.pos
+
+        # If we didn't reposition above, ensure deliberate noise flag is
+        # cleared before fallback exploration to avoid stale True values.
+        self.made_loud_noise = False
 
         # Fallback: explore outward to expand known map and find better
         # farthest-from-missions candidates in unexplored regions.
