@@ -11,8 +11,9 @@ def assign_worker_greedy(agent_specs: Sequence[object], mission_positions: Itera
     - `agent_specs` is a sequence of objects with attributes `role`, `label`, and `agent`.
     - `mission_positions` is an iterable of (y, x) mission tile coordinates.
 
-    The function mutates `spec.agent.team_role` for human agents. Returns the
-    label of the agent promoted to WORKER, or None if no assignment was made.
+    The function does NOT mutate agent state; it only selects the best
+    candidate and returns its label. The caller is responsible for committing
+    the role change and any mission claim side-effects.
     """
     missions = list(mission_positions)
     # Clear existing worker assignments
@@ -38,12 +39,6 @@ def assign_worker_greedy(agent_specs: Sequence[object], mission_positions: Itera
     if best is None:
         return None
 
-    try:
-        # Promote selected agent to WORKER role.
-        setattr(best.agent, "team_role", TeamRole.WORKER)
-    except Exception:
-        return None
-
     return getattr(best, "label", None)
 
 
@@ -61,9 +56,8 @@ def clear_roles(agent_specs: Sequence[object]):
 def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iterable[tuple[int, int]]):
     """Assign `TeamRole.DECOY` to the human agent farthest from mission positions.
 
-    Also sets `agent.mission_positions` for role-aware agents so they can
-    compute farthest tiles locally.
-    Returns the label of the agent assigned, or None.
+    Returns the label of the agent assigned, or None. Note: this function
+    does not mutate `agent.team_role`.
     """
     missions = list(mission_positions)
     human_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
@@ -73,6 +67,8 @@ def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iter
     
     for s in human_specs:
         if hasattr(s.agent, "mission_positions"):
+            # keep mission_positions updated for heuristics; this is a benign
+            # convenience mutation used by agents' local scoring.
             setattr(s.agent, "mission_positions", missions)
 
     # Score agents by distance to missions; choose the one farthest away.
@@ -90,14 +86,6 @@ def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iter
             best_score = min_d
 
     if best is None:
-        return None
-
-    try:
-        # Assign DECOY to the chosen agent.
-        setattr(best.agent, "team_role", TeamRole.DECOY)
-        if hasattr(best.agent, "mission_positions"):
-            setattr(best.agent, "mission_positions", missions)
-    except Exception:
         return None
 
     return getattr(best, "label", None)
@@ -130,11 +118,6 @@ def assign_runner_greedy(agent_specs: Sequence[object], exit_position: tuple[int
             best_score = score
 
     if best is None:
-        return None
-
-    try:
-        setattr(best.agent, "team_role", TeamRole.RUNNER)
-    except Exception:
         return None
 
     return getattr(best, "label", None)

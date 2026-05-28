@@ -51,6 +51,12 @@ class RoleHumanAgent(BaseHumanAgent):
         # Known mission positions, updated from sensing and teammate messages.
         self.mission_positions: list[tuple[int, int]] = []
 
+        # Missions that are currently being worked by a teammate.
+        self.active_mission_positions: set[tuple[int, int]] = set()
+
+        # Mission currently assigned to this worker, if any.
+        self.current_mission: tuple[int, int] | None = None
+
         # Fast lookup for duplicate mission discovery.
         self._known_mission_coords: set[tuple[int, int]] = set()
 
@@ -162,6 +168,8 @@ class RoleHumanAgent(BaseHumanAgent):
         self._outbox.clear()
         self.mission_positions        = []
         self._known_mission_coords    = set()
+        self.active_mission_positions = set()
+        self.current_mission          = None
 
     # ── Coord message bus ─────────────────────────────────────────────────────
 
@@ -182,6 +190,9 @@ class RoleHumanAgent(BaseHumanAgent):
                         if self._known_map[msg.pos] == self.UNKNOWN:
                             self._known_map[msg.pos] = int(Tile.MISSION)
 
+            elif msg.coord_type == CoordType.MISSION_ACTIVE:
+                self.active_mission_positions.add(msg.pos)
+
             elif msg.coord_type == CoordType.MISSION_DONE:
                 self.remove_mission(msg.pos)
 
@@ -194,6 +205,9 @@ class RoleHumanAgent(BaseHumanAgent):
     # Remove a mission that has already been completed.
     def remove_mission(self, pos: tuple[int, int]) -> None:
         self._known_mission_coords.discard(pos)
+        self.active_mission_positions.discard(pos)
+        if self.current_mission == pos:
+            self.current_mission = None
         if pos in self.mission_positions:
             self.mission_positions.remove(pos)
 
@@ -433,7 +447,9 @@ class RoleHumanAgent(BaseHumanAgent):
                 return self.pos
         if target == self.pos:
             return self.pos
-        # No mission known: explore
+
+        # No mission currently assigned (or all known missions are already
+        # claimed by teammates): explore for other important tiles.
         nxt = (
             self._adjacent_unknown_step()
             or self._next_step_to_nearest_frontier()
@@ -446,10 +462,14 @@ class RoleHumanAgent(BaseHumanAgent):
         return self.pos
 
     def _nearest_mission(self) -> tuple[int, int] | None:
-        if not self.mission_positions:
+        if self.current_mission is not None:
+            return self.current_mission
+
+        available = [m for m in self.mission_positions if m not in self.active_mission_positions]
+        if not available:
             return None
         return min(
-            self.mission_positions,
+            available,
             key=lambda m: abs(m[0] - self.pos[0]) + abs(m[1] - self.pos[1]),
         )
 

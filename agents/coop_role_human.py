@@ -4,6 +4,7 @@ from collections import deque
 
 from agents.base import Direction
 from agents.role_human import RoleHumanAgent
+from agents.coord_bus import CoordType, CoordMessage
 from agents.shared_belief import SharedBeliefMap
 
 
@@ -58,6 +59,29 @@ class CoopRoleHumanAgent(RoleHumanAgent):
         super()._integrate_observation(obs)
         if self.shared_map is not None:
             self.shared_map.set_position(self.agent_id, self.pos)
+
+    def receive_coords(self, messages: list[CoordMessage]) -> None:
+        # Accept discovery messages so coop agents learn missions and exits
+        # via teammate broadcasts like other RoleHumanAgents.
+        super().receive_coords(messages)
+
+        # Mirror mission-active claims into the shared map so teammates avoid
+        # exploring mission tiles that are already being worked on.
+        if self.shared_map is None:
+            return
+        for msg in messages:
+            try:
+                if msg.coord_type == CoordType.MISSION_ACTIVE:
+                    # register the mission as our current target so frontiers
+                    # and exploration avoid it when prefer_unclaimed=True
+                    self.shared_map.set_target(self.agent_id, msg.pos)
+                elif msg.coord_type == CoordType.MISSION_DONE:
+                    # clear any target pointing to the completed mission
+                    cur = getattr(self.shared_map, "_targets", {}).get(self.agent_id)
+                    if cur == msg.pos:
+                        self.shared_map.set_target(self.agent_id, None)
+            except Exception:
+                pass
 
     # ── Step ──────────────────────────────────────────────────────────────────
 

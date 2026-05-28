@@ -235,6 +235,7 @@ class GenericMapSimulation:
 
         # Shared-coordinates bus (role-aware agents only)
         self.shared_mission_coords: set[tuple[int, int]] = set()
+        self.shared_active_mission_coords: set[tuple[int, int]] = set()
         self.shared_exit_coord: tuple[int, int] | None = None
         self.completed_mission_events: list[tuple[tuple[int, int], int]] = []
         self._active_frame: SimulationFrame | None = None
@@ -488,16 +489,61 @@ class GenericMapSimulation:
         """Mark a mission complete and trigger reassignment."""
         self.known_missions.discard(position)
         self.pending_missions.discard(position)
+        self.shared_active_mission_coords.discard(position)
         self._debug_log(
             f"complete_mission: pos={position}, known={sorted(self.known_missions)}, pending={sorted(self.pending_missions)}"
         )
         self._maybe_reassign_roles(mission_completed=True)
 
+    def _broadcast_mission_active(self, position: tuple[int, int]) -> None:
+        """Share that a mission is currently being worked on."""
+        self.shared_active_mission_coords.add(position)
+        if not self.role_based:
+            return
+        for spec in self.agents:
+            if spec.role != "human":
+                continue
+            if spec.label in self.captured_humans or spec.label in self.escaped_humans:
+                continue
+            agent = getattr(spec, "agent", None)
+            if agent is None or not hasattr(agent, "receive_coords"):
+                continue
+            try:
+                agent.receive_coords([
+                    CoordMessage(CoordType.MISSION_ACTIVE, position, sender_id=-1)
+                ])
+            except Exception:
+                pass
+
+    def _set_agent_current_mission(self, spec: AgentSpec, mission_pos: tuple[int, int] | None) -> None:
+        agent = getattr(spec, "agent", None)
+        if agent is None:
+            return
+        try:
+            setattr(agent, "current_mission", mission_pos)
+        except Exception:
+            pass
+        if hasattr(agent, "active_mission_positions"):
+            try:
+                if mission_pos is not None:
+                    agent.active_mission_positions.add(mission_pos)
+            except Exception:
+                pass
+
+    def _clear_agent_current_mission(self, spec: AgentSpec) -> None:
+        self._set_agent_current_mission(spec, None)
+
+    def _nearest_unclaimed_mission(self, source: tuple[int, int], missions: Sequence[tuple[int, int]]) -> tuple[int, int] | None:
+        candidates = [pos for pos in missions if pos not in self.shared_active_mission_coords]
+        if not candidates:
+            return None
+        return self._nearest_target(source, candidates)
+
     def _locked_worker_labels(self) -> set[str]:
         """Return labels for WORKERs that should not be reassigned.
 
-        A worker is considered locked if: it currently has `team_role==WORKER` and
-        either is located on a mission tile or exposes `mission_progress > 0`.
+        A worker is considered locked if it already has an assigned mission,
+        is currently standing on a mission tile, or exposes `mission_progress > 0`.
         """
         locked: set[str] = set()
         for s in self.agents:
@@ -509,11 +555,11 @@ class GenericMapSimulation:
             if agent is None:
                 continue
             if getattr(agent, "team_role", None) == TeamRole.WORKER:
-                # Check mission progress attribute if present
                 progress = getattr(agent, "mission_progress", 0)
+                current_mission = getattr(agent, "current_mission", None)
                 pos = self._get_position(s)
                 on_mission_tile = pos in self.known_missions
-                if progress > 0 or on_mission_tile:
+                if progress > 0 or current_mission is not None or on_mission_tile or pos in self.shared_active_mission_coords:
                     locked.add(getattr(s, "label", ""))
         return locked
 
@@ -557,8 +603,13 @@ class GenericMapSimulation:
             f"roles_before={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
         )
 
-        missions = list(self.pending_missions) if self.pending_missions else list(self.known_missions)
-        if not missions:
+        missions = sorted(self.known_missions)
+        active_missions = sorted(self.shared_active_mission_coords)
+        # Missions discovered but not yet claimed by a worker
+        uncovered_missions = [m for m in missions if m not in self.shared_active_mission_coords]
+
+        # If there are no anchors at all and nothing triggered, skip
+        if not missions and not active_missions and not (new_mission or mission_completed or worker_died or exit_opened):
             self._debug_log("reassign_skip: no_missions_to_assign")
             return
 
@@ -566,38 +617,112 @@ class GenericMapSimulation:
         self._debug_log(
             f"clear_roles: before={[(s.label, getattr(s.agent, 'team_role', None)) for s in assignable_specs]}"
         )
+        for spec in assignable_specs:
+            self._clear_agent_current_mission(spec)
         clear_roles(assignable_specs)
         self._debug_log(
             f"clear_roles: after={[(s.label, getattr(s.agent, 'team_role', None)) for s in assignable_specs]}"
         )
 
-        target_worker_count = min(len(missions), len(human_specs))
-        worker_label = None
+        # Desired workers = active (already-working) + uncovered missions
+        desired_workers = min(len(active_missions) + len(uncovered_missions), len(human_specs))
         assigned_workers = len(locked)
+        needed_workers = max(0, desired_workers - assigned_workers)
+
         remaining_specs = list(assignable_specs)
-        while assigned_workers < target_worker_count and remaining_specs:
-            chosen_label = assign_worker_greedy(remaining_specs, missions)
+        remaining_missions = list(uncovered_missions)
+
+        # Fill needed worker slots from closest available humans to uncovered missions
+        while needed_workers > 0 and remaining_specs and remaining_missions:
+            chosen_label = assign_worker_greedy(remaining_specs, remaining_missions)
             self._debug_log(f"assign_worker_greedy: chosen={chosen_label}")
             if chosen_label is None:
                 break
-            worker_label = chosen_label
-            assigned_workers += 1
             promoted = next((s for s in remaining_specs if getattr(s, "label", None) == chosen_label), None)
             if promoted is not None:
                 pos = getattr(promoted.agent, "pos", None)
                 if pos is not None:
-                    nearest = self._nearest_target(pos, missions)
+                    nearest = self._nearest_unclaimed_mission(pos, remaining_missions)
                     if nearest is not None and nearest in self.pending_missions:
                         self.pending_missions.discard(nearest)
+                    if nearest is not None:
+                        self._set_agent_current_mission(promoted, nearest)
+                        try:
+                            setattr(promoted.agent, "team_role", TeamRole.WORKER)
+                        except Exception:
+                            pass
+                        self._broadcast_mission_active(nearest)
+                        remaining_missions = [m for m in remaining_missions if m != nearest]
+                        needed_workers -= 1
             remaining_specs = [s for s in remaining_specs if getattr(s, "label", None) != chosen_label]
 
-        decoy_label = assign_decoy_farthest(remaining_specs, missions) if remaining_specs else None
+        # Assign DECOY to a human. Prefer farthest from mission anchors (active+uncovered).
+        # If there are no mission anchors (e.g. all missions completed), fall back
+        # to choosing the human farthest from the exit so we still pick a decoy.
+        role_anchors = active_missions + remaining_missions
+        if not role_anchors:
+            role_anchors = missions
+        decoy_label = assign_decoy_farthest(remaining_specs, role_anchors) if remaining_specs else None
+        # Fallback: when no anchors exist, pick farthest from exit (topology distance)
+        if decoy_label is None and remaining_specs:
+            exit_pos = self._exit_position()
+            if exit_pos is not None:
+                best = None
+                best_dist = -1
+                for s in remaining_specs:
+                    pos = getattr(s.agent, "pos", None)
+                    if pos is None:
+                        continue
+                    d = self._topology_distance(pos, exit_pos)
+                    if best is None or d > best_dist:
+                        best = s
+                        best_dist = d
+                decoy_label = getattr(best, "label", None) if best is not None else None
+            else:
+                # Ultimate fallback: pick any remaining spec (deterministic by label)
+                decoy_label = remaining_specs[0].label if remaining_specs else None
         self._debug_log(f"assign_decoy_farthest: chosen={decoy_label}")
         remaining_specs = [s for s in remaining_specs if getattr(s, "label", None) != decoy_label]
 
+        # Assign RUNNER from the remaining humans
         exit_pos = self._exit_position()
         runner_label = assign_runner_greedy(remaining_specs, exit_pos, None) if remaining_specs else None
         self._debug_log(f"assign_runner_greedy: chosen={runner_label}, exit_pos={exit_pos}")
+
+        # Commit role assignments for non-locked humans
+        for s in human_specs:
+            label = getattr(s, "label", None)
+            if label in locked:
+                # preserve locked workers
+                continue
+            agent = getattr(s, "agent", None)
+            if agent is None:
+                continue
+            if getattr(agent, "current_mission", None) is not None:
+                try:
+                    setattr(agent, "team_role", TeamRole.WORKER)
+                except Exception:
+                    pass
+                continue
+            if label == decoy_label:
+                try:
+                    setattr(agent, "team_role", TeamRole.DECOY)
+                except Exception:
+                    pass
+                continue
+            if label == runner_label:
+                try:
+                    setattr(agent, "team_role", TeamRole.RUNNER)
+                except Exception:
+                    pass
+                continue
+            try:
+                setattr(agent, "team_role", TeamRole.NONE)
+            except Exception:
+                pass
+
+        # Final safety net removed: do not auto-fill unassigned human roles.
+        self._debug_log("no_fallback: fill_unassigned_human_roles disabled")
 
         self._debug_log(
             f"reassign_done: roles_after={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
@@ -813,6 +938,11 @@ class GenericMapSimulation:
                     agent.remove_mission(position)
                 except Exception:
                     pass
+            if agent is not None and getattr(agent, "current_mission", None) == position:
+                try:
+                    setattr(agent, "current_mission", None)
+                except Exception:
+                    pass
             if agent is not None and hasattr(agent, "receive_coords"):
                 try:
                     agent.receive_coords([
@@ -822,6 +952,7 @@ class GenericMapSimulation:
                     pass
         self.known_missions.discard(position)
         self.pending_missions.discard(position)
+        self.shared_active_mission_coords.discard(position)
         self.shared_mission_coords.discard(position)
         self._mission_dwell_progress.pop(position, None)
         if completer_id is None:
