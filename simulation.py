@@ -1320,8 +1320,9 @@ class GenericMapSimulation:
             # Now set heard_yx for aliens
             if loud_source is not None:
                 h_pos_yx = self._get_position(loud_source)
-                heard_yx_for_aliens = h_pos_yx
-                self.last_noise_ripple = h_pos_yx
+                loud_origin = getattr(loud_source.agent, "loud_noise_pos", None) or h_pos_yx
+                heard_yx_for_aliens = loud_origin
+                self.last_noise_ripple = loud_origin
                 self.noise_ripple_age = 0
                 self.last_noise_deliberate = True
                 try:

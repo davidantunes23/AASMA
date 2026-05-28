@@ -18,6 +18,8 @@ class RoleHumanAgent(BaseHumanAgent):
     ALIEN        = -2
     RADAR_PING   = -3
     NOISE_RIPPLE = -4
+    LOUD_NOISE_DURATION_STEPS = 10
+    LOUD_NOISE_COOLDOWN_STEPS = 20
 
     def __init__(
         self,
@@ -43,6 +45,11 @@ class RoleHumanAgent(BaseHumanAgent):
         self._known_exit: tuple[int, int] | None  = None
         self._observed_aliens: set[tuple[int, int]] = set()
         self.made_loud_noise: bool = False
+        self.loud_noise_pos: tuple[int, int] | None = None
+        self._loud_noise_steps_left: int = 0
+        self._loud_noise_cooldown: int = (
+            self.LOUD_NOISE_COOLDOWN_STEPS if self.team_role == TeamRole.DECOY else 0
+        )
 
         # Mission counters (updated by simulation)
         self.missions_total: int = 0
@@ -75,8 +82,9 @@ class RoleHumanAgent(BaseHumanAgent):
         radar_threat: str | None = None,
         radar_dist:   int | None = None,
     ) -> None:
-        self.last_radar_threat = radar_threat
-        self.last_radar_dist   = radar_dist
+        if radar_threat is not None:
+            self.last_radar_threat = radar_threat
+            self.last_radar_dist   = radar_dist
         self._init_memory(obs)
         self._integrate_observation(obs)
 
@@ -175,6 +183,9 @@ class RoleHumanAgent(BaseHumanAgent):
         self._seen_mission_coords     = set()
         self.active_mission_positions = set()
         self.current_mission          = None
+        self.loud_noise_pos           = None
+        self._loud_noise_steps_left   = 0
+        self._loud_noise_cooldown     = 0
 
     # ── Coord message bus ─────────────────────────────────────────────────────
 
@@ -482,12 +493,37 @@ class RoleHumanAgent(BaseHumanAgent):
 
     # ── DECOY helpers ─────────────────────────────────────────────────────────
 
+    def _update_decoy_loud_noise(self, can_start_noise: bool) -> bool:
+        started_now = False
+        if self._loud_noise_cooldown > 0:
+            self._loud_noise_cooldown -= 1
+
+        if self._tile_at(self.pos) == int(Tile.HIDE):
+            can_start_noise = False
+
+        if self._loud_noise_steps_left == 0 and self._loud_noise_cooldown == 0 and can_start_noise:
+            self._loud_noise_steps_left = self.LOUD_NOISE_DURATION_STEPS
+            started_now = True
+            self.loud_noise_pos = self.pos
+
+        if self._loud_noise_steps_left > 0:
+            self.made_loud_noise = True
+            self._loud_noise_steps_left -= 1
+            if self._loud_noise_steps_left == 0:
+                self._loud_noise_cooldown = self.LOUD_NOISE_COOLDOWN_STEPS
+        else:
+            self.made_loud_noise = False
+            self.loud_noise_pos = None
+        return started_now
+
     def _decoy_step(self) -> tuple[int, int]:
         # CRITICAL: alien is adjacent — pure survival, no noise.
         # Justification: noise here just confirms a position the alien
         # already knows. Only action is to flee to the nearest hide spot.
         if self.last_radar_threat == "CRITICAL":
-            self.made_loud_noise = False
+            self._update_decoy_loud_noise(False)
+            if self.hidden:
+                return self.pos
             spot = self._get_closest_hiding_spot()
             if spot is not None:
                 nxt = self._step_toward_target(spot)
@@ -502,7 +538,7 @@ class RoleHumanAgent(BaseHumanAgent):
         # Justification: too dangerous to bait; reaching cover is the only
         # priority. No noise even if already hidden — hidden means silent.
         if self.last_radar_threat == "CLOSE":
-            self.made_loud_noise = False
+            self._update_decoy_loud_noise(False)
             if self.hidden:
                 # Already in cover — stay put and wait it out.
                 return self.pos
@@ -520,42 +556,32 @@ class RoleHumanAgent(BaseHumanAgent):
         # Justification: alien is close enough to hear the noise and be drawn
         # toward the Decoy's area (away from missions), but far enough that the
         # Decoy can reposition before it arrives.
-        # Noise only allowed when NOT hidden — hidden agents cannot make noise.
         if self.last_radar_threat == "NEAR":
+            if self._update_decoy_loud_noise(not self.hidden):
+                return self.pos
             # Reposition to farthest-from-missions tile regardless of noise,
             # so the alien arrives at an empty spot (decoy-and-dodge pattern).
-            # Only emit loud noise after movement and only if not on a hide tile.
             far_tile = self._farthest_from_missions()
             if far_tile is not None:
                 nxt = self._step_toward_target(far_tile)
                 if nxt is not None and nxt != self.pos:
                     self.direction = self._direction_from_step(self.pos, nxt)
                     self.pos       = nxt
-                    self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                    # Emit noise only when not hidden (and not standing on a hide tile).
-                    self.made_loud_noise = not self.hidden and (self._tile_at(self.pos) != int(Tile.HIDE))
-                    return self.pos
-            # No movement; still only allow noise if not on a hide tile.
-            self.made_loud_noise = not (self._tile_at(self.pos) == int(Tile.HIDE))
+            self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
             return self.pos
 
         # FAR or no threat — reposition to attraction zone and optionally
-        # emit a deliberate noise to preemptively draw aliens away. Deliberate
-        # noise is allowed in FAR as well, but not when hidden.
+        # emit a deliberate noise to preemptively draw aliens away.
+        if self._update_decoy_loud_noise(self.last_radar_threat == "FAR" and not self.hidden):
+            return self.pos
         far_tile = self._farthest_from_missions()
         if far_tile is not None and far_tile != self.pos:
             nxt = self._step_toward_target(far_tile)
             if nxt is not None and nxt != self.pos:
                 self.direction = self._direction_from_step(self.pos, nxt)
                 self.pos       = nxt
-                self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                # Allow deliberate noise in FAR to be emitted after repositioning
-                self.made_loud_noise = not self.hidden and (self._tile_at(self.pos) != int(Tile.HIDE))
-                return self.pos
-
-        # If we didn't reposition above, ensure deliberate noise flag is
-        # cleared before fallback exploration to avoid stale True values.
-        self.made_loud_noise = False
+            self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+            return self.pos
 
         # Fallback: explore outward to expand known map and find better
         # farthest-from-missions candidates in unexplored regions.
