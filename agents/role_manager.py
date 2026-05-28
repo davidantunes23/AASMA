@@ -91,21 +91,28 @@ def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iter
     return getattr(best, "label", None)
 
 
-def assign_workers_omniscient(agent_specs: Sequence[object], mission_positions: Iterable[tuple[int, int]]) -> None:
-    """Assign WORKER via greedy min-cost bipartite matching (one worker per mission).
+def assign_workers_omniscient(
+    agent_specs: Sequence[object],
+    mission_positions: Iterable[tuple[int, int]],
+) -> list[tuple[object, tuple[int, int]]]:
+    """Return an optimal (agent_spec, mission) pairing via greedy min-cost matching.
 
-    Each iteration picks the globally closest (agent, mission) pair, assigns that
-    agent as WORKER, and removes both from the remaining pools so no two workers
-    target the same mission. Remaining agents are left untouched (caller assigns DECOY).
+    Each iteration picks the globally closest (agent, mission) pair and removes
+    both from the remaining pools so no two workers are paired with the same
+    mission. Does NOT mutate agent state — the caller commits roles and mission
+    assignments after inspecting the returned pairs.
+
+    Returns a list of (spec, mission_pos) pairs in assignment order.
     """
     missions = list(mission_positions)
     available_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
 
     if not missions or not available_specs:
-        return
+        return []
 
     n_workers = min(len(missions), len(available_specs))
     available_missions = list(missions)
+    pairs: list[tuple[object, tuple[int, int]]] = []
 
     for _ in range(n_workers):
         if not available_specs or not available_missions:
@@ -125,12 +132,11 @@ def assign_workers_omniscient(agent_specs: Sequence[object], mission_positions: 
                     best_mission = m
         if best_spec is None:
             break
-        try:
-            setattr(best_spec.agent, "team_role", TeamRole.WORKER)
-        except Exception:
-            pass
+        pairs.append((best_spec, best_mission))
         available_specs.remove(best_spec)
         available_missions.remove(best_mission)
+
+    return pairs
 
 
 def assign_runner_greedy(agent_specs: Sequence[object], exit_position: tuple[int, int] | None, alien_position: tuple[int, int] | None = None):

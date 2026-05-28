@@ -643,17 +643,56 @@ class GenericMapSimulation:
             self._debug_log("reassign_skip: no_missions_to_assign")
             return
 
-        # Omniscient path: one worker per mission, no runner.
+        # Omniscient path: one worker per mission (no redundancy), no runner.
         if self.omniscient_roles:
             all_missions = list(self.known_missions)
+            for spec in assignable_specs:
+                self._clear_agent_current_mission(spec)
             clear_roles(assignable_specs)
-            assign_workers_omniscient(assignable_specs, all_missions)
-            remaining = [
-                s for s in assignable_specs
-                if getattr(s.agent, "team_role", None) != TeamRole.WORKER
-            ]
-            if remaining:
-                assign_decoy_farthest(remaining, all_missions)
+
+            # Exclude missions already claimed by locked workers so the matcher
+            # never pairs a free agent with a mission already being worked on.
+            locked_missions = {
+                getattr(s.agent, "current_mission", None)
+                for s in human_specs
+                if getattr(s, "label", "") in locked
+            }
+            locked_missions.discard(None)
+            available_missions = [m for m in all_missions if m not in locked_missions]
+
+            pairs = assign_workers_omniscient(assignable_specs, available_missions)
+            worker_labels: set[str] = set()
+            for spec, mission in pairs:
+                self._set_agent_current_mission(spec, mission)
+                self._broadcast_mission_active(mission)
+                worker_labels.add(getattr(spec, "label", ""))
+
+            remaining = [s for s in assignable_specs if getattr(s, "label", "") not in worker_labels]
+            decoy_label = assign_decoy_farthest(remaining, all_missions) if remaining else None
+
+            for s in human_specs:
+                label = getattr(s, "label", "")
+                if label in locked:
+                    continue
+                agent = getattr(s, "agent", None)
+                if agent is None:
+                    continue
+                if getattr(agent, "current_mission", None) is not None:
+                    try:
+                        setattr(agent, "team_role", TeamRole.WORKER)
+                    except Exception:
+                        pass
+                elif label == decoy_label:
+                    try:
+                        setattr(agent, "team_role", TeamRole.DECOY)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        setattr(agent, "team_role", TeamRole.NONE)
+                    except Exception:
+                        pass
+
             self._debug_log(
                 f"omniscient_reassign_done: roles={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
             )
