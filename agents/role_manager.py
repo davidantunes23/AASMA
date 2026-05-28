@@ -91,6 +91,48 @@ def assign_decoy_farthest(agent_specs: Sequence[object], mission_positions: Iter
     return getattr(best, "label", None)
 
 
+def assign_workers_omniscient(agent_specs: Sequence[object], mission_positions: Iterable[tuple[int, int]]) -> None:
+    """Assign WORKER via greedy min-cost bipartite matching (one worker per mission).
+
+    Each iteration picks the globally closest (agent, mission) pair, assigns that
+    agent as WORKER, and removes both from the remaining pools so no two workers
+    target the same mission. Remaining agents are left untouched (caller assigns DECOY).
+    """
+    missions = list(mission_positions)
+    available_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
+
+    if not missions or not available_specs:
+        return
+
+    n_workers = min(len(missions), len(available_specs))
+    available_missions = list(missions)
+
+    for _ in range(n_workers):
+        if not available_specs or not available_missions:
+            break
+        best_spec = None
+        best_mission = None
+        best_dist = float("inf")
+        for s in available_specs:
+            pos = getattr(s.agent, "pos", None)
+            if pos is None:
+                continue
+            for m in available_missions:
+                d = abs(pos[0] - m[0]) + abs(pos[1] - m[1])
+                if d < best_dist:
+                    best_dist = d
+                    best_spec = s
+                    best_mission = m
+        if best_spec is None:
+            break
+        try:
+            setattr(best_spec.agent, "team_role", TeamRole.WORKER)
+        except Exception:
+            pass
+        available_specs.remove(best_spec)
+        available_missions.remove(best_mission)
+
+
 def assign_runner_greedy(agent_specs: Sequence[object], exit_position: tuple[int, int] | None, alien_position: tuple[int, int] | None = None):
     """Assign `TeamRole.RUNNER` to the human agent best positioned to reach the exit.
 

@@ -49,8 +49,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--demo", choices=["random", "rule"], default="rule",
                         help="Agent type: 'rule' for rule-based, 'random' for random (default: rule)")
     parser.add_argument("--human-count", type=int, default=1, help="Number of human agents to create (default: 1)")
-    parser.add_argument("--human-class", choices=["random", "human", "role", "coop"], default="human",
-                        help="Human agent implementation: 'human' (rule), 'role' (role-aware), 'coop' (shared-map cooperative), or 'random' (default: human)")
+    parser.add_argument("--human-class", choices=["random", "human", "role", "coop", "omniscient"], default="human",
+                        help="Human agent implementation: 'human' (rule), 'role' (role-aware), 'coop' (shared-map cooperative), 'omniscient' (upper-bound: full map/missions/exit pre-known), or 'random' (default: human)")
     parser.add_argument("--alien-count", type=int, default=1, help="Number of alien agents to create (default: 1)")
     parser.add_argument("--alien-class", choices=["random", "alien"], default="alien",
                         help="Alien agent implementation: 'alien' (rule) or 'random' (default: alien)")
@@ -120,6 +120,10 @@ def build_agents(
             from agents.coop_role_human import CoopRoleHumanAgent
             from agents.base import Direction
             return CoopRoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
+        if human_class == "omniscient":
+            from agents.omniscient_human import OmniscientHumanAgent
+            from agents.base import Direction
+            return OmniscientHumanAgent(grid=grid.copy(), start_pos=human_start, start_dir=Direction.NORTH)
         # default: rule-based HumanAgent
         from agents.rule_human import HumanAgent
         from agents.base import Direction
@@ -188,6 +192,12 @@ def main():
         mission_steps=args.mission_steps,
     )
     simulation.mission_tile_values = {int(Tile.MISSION)}
+
+    if args.human_class == "omniscient":
+        simulation.omniscient_roles = True
+        for pos in simulation._mission_positions():
+            simulation.add_mission(pos)
+
     print(f"Role debug log: {simulation.debug_log_path}")
 
     frames, outcome = simulation.run(max_steps=args.max_steps)

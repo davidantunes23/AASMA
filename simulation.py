@@ -19,6 +19,7 @@ from agents.rule_alien import AlienState
 from agents.coord_bus import CoordMessage, CoordType
 from agents.role_manager import (
     assign_worker_greedy,
+    assign_workers_omniscient,
     assign_decoy_farthest,
     assign_runner_greedy,
     clear_roles,
@@ -211,6 +212,10 @@ class GenericMapSimulation:
         # perform automatic role reassignment; roles may still be set manually
         # via `set_initial_roles` or `allocate_roles_by_counts`.
         self.role_based: bool = True
+        # When True, use omniscient assignment: one worker per mission (no
+        # redundancy) and no RUNNER role. Set this when all agents are
+        # OmniscientHumanAgent instances.
+        self.omniscient_roles: bool = False
         # Mission tile values to auto-detect (set of integer tile ids).
         # If empty, automatic mission detection is disabled. Example: {7}
         self.mission_tile_values: set[int] = set()
@@ -636,6 +641,22 @@ class GenericMapSimulation:
         # If there are no anchors at all and nothing triggered, skip
         if not missions and not active_missions and not (new_mission or mission_completed or worker_died or exit_opened):
             self._debug_log("reassign_skip: no_missions_to_assign")
+            return
+
+        # Omniscient path: one worker per mission, no runner.
+        if self.omniscient_roles:
+            all_missions = list(self.known_missions)
+            clear_roles(assignable_specs)
+            assign_workers_omniscient(assignable_specs, all_missions)
+            remaining = [
+                s for s in assignable_specs
+                if getattr(s.agent, "team_role", None) != TeamRole.WORKER
+            ]
+            if remaining:
+                assign_decoy_farthest(remaining, all_missions)
+            self._debug_log(
+                f"omniscient_reassign_done: roles={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
+            )
             return
 
         # Reassign all non-locked roles from scratch, but preserve locked workers.
