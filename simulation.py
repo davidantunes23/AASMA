@@ -608,6 +608,31 @@ class GenericMapSimulation:
         # Missions discovered but not yet claimed by a worker
         uncovered_missions = [m for m in missions if m not in self.shared_active_mission_coords]
 
+        # Endgame policy: if all missions are completed and there are no
+        # active/known mission anchors left, remove WORKER/DECOY roles.
+        # Everyone still alive should become RUNNER.
+        all_missions_done = (
+            self._missions_remaining() == 0
+            and not missions
+            and not active_missions
+            and not uncovered_missions
+        )
+        if all_missions_done:
+            self._debug_log("reassign_endgame: all missions completed -> runners only")
+            for s in human_specs:
+                agent = getattr(s, "agent", None)
+                if agent is None:
+                    continue
+                self._clear_agent_current_mission(s)
+                try:
+                    setattr(agent, "team_role", TeamRole.RUNNER)
+                except Exception:
+                    pass
+            self._debug_log(
+                f"reassign_done: roles_after={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
+            )
+            return
+
         # If there are no anchors at all and nothing triggered, skip
         if not missions and not active_missions and not (new_mission or mission_completed or worker_died or exit_opened):
             self._debug_log("reassign_skip: no_missions_to_assign")

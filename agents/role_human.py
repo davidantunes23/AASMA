@@ -60,6 +60,10 @@ class RoleHumanAgent(BaseHumanAgent):
         # Fast lookup for duplicate mission discovery.
         self._known_mission_coords: set[tuple[int, int]] = set()
 
+        # Persistent mission discovery memory for this episode.
+        # Unlike _known_mission_coords, this is NOT cleared on MISSION_DONE.
+        self._seen_mission_coords: set[tuple[int, int]] = set()
+
         # Messages discovered during observe() are queued here.
         self._outbox: list[CoordMessage] = []
 
@@ -168,6 +172,7 @@ class RoleHumanAgent(BaseHumanAgent):
         self._outbox.clear()
         self.mission_positions        = []
         self._known_mission_coords    = set()
+        self._seen_mission_coords     = set()
         self.active_mission_positions = set()
         self.current_mission          = None
 
@@ -185,6 +190,7 @@ class RoleHumanAgent(BaseHumanAgent):
             if msg.coord_type == CoordType.MISSION:
                 if msg.pos not in self._known_mission_coords:
                     self._known_mission_coords.add(msg.pos)
+                    self._seen_mission_coords.add(msg.pos)
                     self.mission_positions.append(msg.pos)
                     if self._known_map is not None and self._in_bounds(*msg.pos):
                         if self._known_map[msg.pos] == self.UNKNOWN:
@@ -254,6 +260,7 @@ class RoleHumanAgent(BaseHumanAgent):
             pos = (int(y), int(x))
             if pos not in self._known_mission_coords:
                 self._known_mission_coords.add(pos)
+                self._seen_mission_coords.add(pos)
                 self.mission_positions.append(pos)
                 self._outbox.append(CoordMessage(
                     coord_type=CoordType.MISSION,
@@ -594,6 +601,22 @@ class RoleHumanAgent(BaseHumanAgent):
     # ── RUNNER helpers ────────────────────────────────────────────────────────
 
     def _runner_step(self) -> tuple[int, int]:
+        # If some missions are still undiscovered, keep exploring instead of
+        # staging at the exit. Mission discovery is counted from MISSION
+        # observations/messages and is not reduced when missions complete.
+        if self.missions_total > 0:
+            missing_missions = (
+                not self.exit_open
+                and len(self._seen_mission_coords) < self.missions_total
+            )
+        else:
+            # Fallback when total mission count is unavailable.
+            missing_missions = (
+                not self.exit_open
+                and self.missions_remaining > 0
+                and self.missions_remaining > len(self._known_mission_coords)
+            )
+
         # PRIORITY 1: Exit open and known → escape if safe
         if self.exit_open and self._known_exit is not None:
             if self.last_radar_threat is None or self.last_radar_threat == "FAR":
@@ -620,8 +643,9 @@ class RoleHumanAgent(BaseHumanAgent):
                     return self.pos
             return self.pos
 
-        # PRIORITY 2: Exit known but locked → stage near it
-        if self._known_exit is not None:
+        # PRIORITY 2: Exit known but locked → stage near it only when
+        # all remaining missions are already known.
+        if self._known_exit is not None and not missing_missions:
             if self.last_radar_threat in {"CRITICAL", "CLOSE"}:
                 spot = self._get_closest_hiding_spot()
                 if spot is not None:
