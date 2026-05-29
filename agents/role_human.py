@@ -12,7 +12,6 @@ class RoleHumanAgent(BaseHumanAgent):
     """
 
     _next_agent_id = 0
-    _initial_roles = (TeamRole.WORKER, TeamRole.DECOY, TeamRole.RUNNER)
 
     UNKNOWN      = -1
     ALIEN        = -2
@@ -35,10 +34,7 @@ class RoleHumanAgent(BaseHumanAgent):
         self.view_length  = view_length
         self.hidden: bool = False
         self.exit_open: bool = False
-        if self.agent_id < len(self._initial_roles):
-            self.team_role: TeamRole | None = self._initial_roles[self.agent_id]
-        else:
-            self.team_role = TeamRole.NONE
+        self.team_role: TeamRole | None = TeamRole.RUNNER
         self.last_radar_threat: str | None = None
         self.last_radar_dist:   int | None = None
         self._known_map:  np.ndarray | None       = None

@@ -538,6 +538,37 @@ class GenericMapSimulation:
     def _clear_agent_current_mission(self, spec: AgentSpec) -> None:
         self._set_agent_current_mission(spec, None)
 
+    def _release_captured_worker_claims(self, captured_labels: set[str]) -> None:
+        """Clear mission claims from humans that were just captured.
+
+        The mission itself stays active in shared state so reassignment can
+        immediately pick a replacement worker if one is available.
+        """
+        for spec in self.agents:
+            if spec.role != "human" or spec.label not in captured_labels:
+                continue
+            agent = getattr(spec, "agent", None)
+            if agent is None:
+                continue
+
+            mission_pos = getattr(agent, "current_mission", None)
+            if mission_pos is None:
+                continue
+
+            try:
+                setattr(agent, "current_mission", None)
+            except Exception:
+                pass
+            if hasattr(agent, "active_mission_positions"):
+                try:
+                    agent.active_mission_positions.discard(mission_pos)
+                except Exception:
+                    pass
+
+            self._debug_log(
+                f"release_captured_worker_claim: pos={mission_pos}, captured={sorted(captured_labels)}"
+            )
+
     def _nearest_unclaimed_mission(self, source: tuple[int, int], missions: Sequence[tuple[int, int]]) -> tuple[int, int] | None:
         candidates = [pos for pos in missions if pos not in self.shared_active_mission_coords]
         if not candidates:
@@ -610,8 +641,17 @@ class GenericMapSimulation:
 
         missions = sorted(self.known_missions)
         active_missions = sorted(self.shared_active_mission_coords)
-        # Missions discovered but not yet claimed by a worker
-        uncovered_missions = [m for m in missions if m not in self.shared_active_mission_coords]
+        claimed_missions = {
+            mission_pos
+            for s in human_specs
+            for mission_pos in [getattr(s.agent, "current_mission", None)]
+            if mission_pos is not None
+        }
+        # Missions currently active but without a living worker assigned.
+        unowned_active_missions = [m for m in active_missions if m not in claimed_missions]
+        # Missions waiting to be assigned to a worker.
+        pending_missions = sorted(self.pending_missions)
+        target_missions = list(unowned_active_missions + pending_missions)
 
         # Endgame policy: if all missions are completed and there are no
         # active/known mission anchors left, remove WORKER/DECOY roles.
@@ -620,7 +660,7 @@ class GenericMapSimulation:
             self._missions_remaining() == 0
             and not missions
             and not active_missions
-            and not uncovered_missions
+            and not pending_missions
         )
         if all_missions_done:
             self._debug_log("reassign_endgame: all missions completed -> runners only")
@@ -709,15 +749,16 @@ class GenericMapSimulation:
             f"clear_roles: after={[(s.label, getattr(s.agent, 'team_role', None)) for s in assignable_specs]}"
         )
 
-        # Desired workers = active (already-working) + uncovered missions
-        desired_workers = min(len(active_missions) + len(uncovered_missions), len(human_specs))
+        # Desired workers = all known missions, capped by the number of alive humans.
+        desired_workers = min(len(missions), len(human_specs))
         assigned_workers = len(locked)
         needed_workers = max(0, desired_workers - assigned_workers)
 
         remaining_specs = list(assignable_specs)
-        remaining_missions = list(uncovered_missions)
+        remaining_missions = list(target_missions)
 
-        # Fill needed worker slots from closest available humans to uncovered missions
+        # Fill needed worker slots from closest available humans to missions that
+        # still need a living worker assigned.
         while needed_workers > 0 and remaining_specs and remaining_missions:
             chosen_label = assign_worker_greedy(remaining_specs, remaining_missions)
             self._debug_log(f"assign_worker_greedy: chosen={chosen_label}")
@@ -727,10 +768,9 @@ class GenericMapSimulation:
             if promoted is not None:
                 pos = getattr(promoted.agent, "pos", None)
                 if pos is not None:
-                    nearest = self._nearest_unclaimed_mission(pos, remaining_missions)
-                    if nearest is not None and nearest in self.pending_missions:
-                        self.pending_missions.discard(nearest)
+                    nearest = self._nearest_target(pos, remaining_missions)
                     if nearest is not None:
+                        self.pending_missions.discard(nearest)
                         self._set_agent_current_mission(promoted, nearest)
                         try:
                             setattr(promoted.agent, "team_role", TeamRole.WORKER)
@@ -741,7 +781,7 @@ class GenericMapSimulation:
                         needed_workers -= 1
             remaining_specs = [s for s in remaining_specs if getattr(s, "label", None) != chosen_label]
 
-        # Assign DECOY to a human. Prefer farthest from mission anchors (active+uncovered).
+        # Assign DECOY to a human. Prefer farthest from mission anchors.
         # If there are no mission anchors (e.g. all missions completed), fall back
         # to choosing the human farthest from the exit so we still pick a decoy.
         role_anchors = active_missions + remaining_missions
@@ -1298,6 +1338,7 @@ class GenericMapSimulation:
             newly_captured = self._captured_human_labels(post_human_agents, captured_humans | escaped_humans)
             if newly_captured:
                 captured_humans.update(newly_captured)
+                self._release_captured_worker_claims(newly_captured)
                 self._maybe_reassign_roles(worker_died=True)
             else:
                 captured_humans.update(newly_captured)
