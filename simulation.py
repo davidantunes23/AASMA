@@ -565,6 +565,31 @@ class GenericMapSimulation:
                 except Exception:
                     pass
 
+            # Clear any shared belief entries for this captured agent (targets/positions)
+            try:
+                shared_map = getattr(agent, "shared_map", None)
+                aid = getattr(agent, "agent_id", None)
+                if shared_map is not None and aid is not None:
+                    try:
+                        # Prefer explicit API if available
+                        if hasattr(shared_map, "clear_agent"):
+                            shared_map.clear_agent(aid)
+                        else:
+                            # Best-effort fallback
+                            try:
+                                shared_map.set_target(aid, None)
+                            except Exception:
+                                pass
+                            try:
+                                if hasattr(shared_map, "_positions"):
+                                    shared_map._positions.pop(aid, None)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
             self._debug_log(
                 f"release_captured_worker_claim: pos={mission_pos}, captured={sorted(captured_labels)}"
             )

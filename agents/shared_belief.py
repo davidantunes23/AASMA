@@ -28,6 +28,21 @@ class SharedBeliefMap:
     def set_target(self, agent_id: int, target: tuple[int, int] | None) -> None:
         self._targets[agent_id] = target
 
+    def clear_agent(self, agent_id: int) -> None:
+        """Remove any stored state for an agent (targets and positions).
+
+        Used when an agent is removed or captured so stale claims do not
+        prevent teammates from exploring frontiers.
+        """
+        try:
+            self._targets.pop(agent_id, None)
+        except Exception:
+            pass
+        try:
+            self._positions.pop(agent_id, None)
+        except Exception:
+            pass
+
     # ── Query helpers ─────────────────────────────────────────────────────────
 
     def is_targeted_by_other(self, pos: tuple[int, int], my_id: int) -> bool:

@@ -41,11 +41,13 @@ class CoopRoleHumanAgent(RoleHumanAgent):
             and self.shared_map.known_map.shape == obs.shape
         ):
             if self._known_map is not self.shared_map.known_map:
+                prev_known_exit = self._known_exit
                 # First time: alias _known_map to the shared array.
                 # All subsequent writes via _integrate_observation go directly
                 # into the shared array without any extra copying.
                 self._known_map = self.shared_map.known_map
-                self._known_exit = None
+                # Preserve already-known exit when switching map backing.
+                self._known_exit = prev_known_exit
                 self._observed_aliens = set()
             return
         # Fallback (solo agent or shape mismatch): own independent map.
