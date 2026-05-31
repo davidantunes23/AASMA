@@ -49,8 +49,9 @@ class HumanAgent(BaseHumanAgent):
         radar_threat: str | None = None,
         radar_dist: int | None = None,
     ) -> None:
-        self.last_radar_threat = radar_threat
-        self.last_radar_dist = radar_dist
+        if radar_threat is not None:
+            self.last_radar_threat = radar_threat
+            self.last_radar_dist = radar_dist
         self._init_memory(obs)
         self._integrate_observation(obs)
 
@@ -71,7 +72,20 @@ class HumanAgent(BaseHumanAgent):
             else:
                 return self.pos
 
-        # PRIORITY 2: Handle current objective (mission or exit)
+        # PRIORITY 2: Hide when threatened and no nearby exit
+        if self._should_hide_now():
+            spot = self._get_closest_hiding_spot()
+            if spot is not None:
+                nxt = self._step_toward_target(spot)
+                if nxt is not None:
+                    if nxt != self.pos:
+                        self.pos = nxt
+                    else:
+                        self.hidden = True
+                    self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                    return self.pos
+
+        # PRIORITY 3: Handle current objective (mission or exit)
         self._current_objective = self._select_objective()
         if self._current_objective is not None and self._current_objective in self._known_missions:
             if self.pos == self._current_objective:
@@ -90,19 +104,6 @@ class HumanAgent(BaseHumanAgent):
                 self.pos = nxt
                 self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
                 return self.pos
-
-        # PRIORITY 3: Hide when threatened and no nearby exit
-        if self._should_hide_now():
-            spot = self._get_closest_hiding_spot()
-            if spot is not None:
-                nxt = self._step_toward_target(spot)
-                if nxt is not None:
-                    if nxt != self.pos:
-                        self.pos = nxt
-                    else:
-                        self.hidden = True
-                    self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                    return self.pos
 
         # PRIORITY 4: Explore
         nxt = self._adjacent_unknown_step()

@@ -53,8 +53,9 @@ class OmniscientHumanAgent(RoleHumanAgent):
         radar_threat: str | None = None,
         radar_dist: int | None = None,
     ) -> None:
-        self.last_radar_threat = radar_threat
-        self.last_radar_dist = radar_dist
+        if radar_threat is not None:
+            self.last_radar_threat = radar_threat
+            self.last_radar_dist = radar_dist
         self.hidden = self._tile_at(self.pos) == int(Tile.HIDE)
         radar_active = np.any(obs == self.RADAR_PING)
         self._observed_aliens = {self.pos} if radar_active else set()
