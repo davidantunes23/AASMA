@@ -75,9 +75,14 @@ class HumanAgent(BaseHumanAgent):
         self._current_objective = self._select_objective()
         if self._current_objective is not None and self._current_objective in self._known_missions:
             if self.pos == self._current_objective:
-                self._advance_current_mission()
+                completed = self._advance_current_mission()
                 self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                return self.pos
+                if not completed:
+                    return self.pos
+                self._current_objective = None
+
+        if self._current_objective is None:
+            self._current_objective = self._select_objective()
 
         if self._current_objective is not None:
             nxt = self._step_toward_target(self._current_objective)
@@ -131,6 +136,13 @@ class HumanAgent(BaseHumanAgent):
         self.last_radar_threat = None
         self.last_radar_dist = None
 
+    def remove_mission(self, position: tuple[int, int]) -> None:
+        pos = (int(position[0]), int(position[1]))
+        self._known_missions.discard(pos)
+        self._completed_missions.add(pos)
+        if self._current_objective == pos:
+            self._current_objective = None
+
     # ── Observation integration ───────────────────────────────────────────────
 
     def _init_memory(self, obs: np.ndarray):
@@ -160,11 +172,20 @@ class HumanAgent(BaseHumanAgent):
         ey, ex = np.where(self._known_map == int(Tile.EXIT))
         if len(ey) > 0:
             self._known_exit = (int(ey[0]), int(ex[0]))
-        my, mx = np.where(self._known_map == int(Tile.MISSION))
+        my, mx = np.where(obs == int(Tile.MISSION))
         if len(my) > 0:
             seen = {(int(y), int(x)) for y, x in zip(my, mx)}
             self._known_missions |= seen
-            self._known_missions -= self._completed_missions
+        if self._known_missions:
+            vy, vx = np.where(visible_mask)
+            visible_positions = {(int(y), int(x)) for y, x in zip(vy, vx)}
+            stale = {
+                pos for pos in self._known_missions
+                if pos in visible_positions and obs[pos] != int(Tile.MISSION)
+            }
+            if stale:
+                self._known_missions -= stale
+        self._known_missions -= self._completed_missions
 
     # ── Navigation ────────────────────────────────────────────────────────────
 
@@ -188,20 +209,12 @@ class HumanAgent(BaseHumanAgent):
         return None
 
     def _exit_unlocked(self) -> bool:
-        if self.mission_manager is None:
-            return True
-        return self.mission_manager.exit_unlocked()
+        return bool(self.exit_open)
 
-    def _advance_current_mission(self) -> None:
+    def _advance_current_mission(self) -> bool:
         if self._current_objective is None:
-            return
-        if self.mission_manager is not None:
-            completed = self.mission_manager.update(self._current_objective)
-        else:
-            completed = True
-        if completed:
-            self._completed_missions.add(self._current_objective)
-            self._known_missions.discard(self._current_objective)
+            return False
+        return False
 
     def _adjacent_unknown_step(self) -> tuple[int, int] | None:
         y, x = self.pos
