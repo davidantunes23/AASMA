@@ -82,6 +82,7 @@ class SimulationFrame:
     escaped_humans: list[str] | None = None
     mission_done_events: list[tuple[tuple[int, int], int]] | None = None
     agent_roles: dict[int, str] | None = None
+    shared_belief_map: Optional[np.ndarray] = None
 
 
 THREAT_COLORS = {
@@ -238,6 +239,9 @@ class GenericMapSimulation:
         self.captured_humans: set[str] = set()
         self.escaped_humans: set[str] = set()
 
+        # Shared belief map reference for cooperative agents (set during coop wiring)
+        self._shared_belief_map = None
+
         # Shared-coordinates bus (role-aware agents only)
         self.shared_mission_coords: set[tuple[int, int]] = set()
         self.shared_active_mission_coords: set[tuple[int, int]] = set()
@@ -302,6 +306,7 @@ class GenericMapSimulation:
             sbm = SharedBeliefMap(self.grid.shape)
             for agent in coop_agents:
                 agent.shared_map = sbm
+            self._shared_belief_map = sbm
 
     def _debug_log(self, message: str) -> None:
         try:
@@ -1173,6 +1178,11 @@ class GenericMapSimulation:
                         alien_heard = getattr(spec.agent, "last_heard_pos", None)
                         break
 
+            sbm_snapshot = (
+                self._shared_belief_map.known_map.copy()
+                if self._shared_belief_map is not None
+                else None
+            )
             frames.append(SimulationFrame(
                 step=step,
                 outcome=outcome,
@@ -1189,6 +1199,7 @@ class GenericMapSimulation:
                 escaped_humans=sorted(escaped_humans),
                 mission_done_events=list(self.completed_mission_events),
                 agent_roles=self._track_role_changes(current_agents, f"{step}:pre"),
+                shared_belief_map=sbm_snapshot,
             ))
             self._active_frame = frames[-1]
             if outcome is not None or step == max_steps:
@@ -1524,6 +1535,7 @@ class GenericMapSimulation:
             a.role == "human" and a.agent_id is not None
             for a in frames[0].agents
         )
+        has_shared_belief = any(f.shared_belief_map is not None for f in frames)
 
         if world_only or self.knowledge_mode == "off":
             def _set_scatter_marker(artist, marker: str) -> None:
@@ -1734,12 +1746,25 @@ class GenericMapSimulation:
             fig, axes_2d = plt.subplots(2, 3, figsize=(18, 10), dpi=120)
             fig.patch.set_facecolor("#000000")
             axes_flat = list(axes_2d.flat)
-            # hide any empty content slots between the last agent panel and the debug slot
+            # hide any empty content slots between the last agent panel and the debug/sbm slot
             for ax in axes_flat[n_panels:5]:
                 ax.set_visible(False)
             debug_ax = axes_flat[5]
-            debug_ax.set_facecolor("#0f0f1e")
-            debug_ax.axis("off")
+            if has_shared_belief:
+                # Repurpose the debug slot as the shared belief map panel
+                debug_ax.set_facecolor("#0f0f1e")
+                debug_ax.set_title("Team Shared Belief", color="white", fontsize=11, fontweight="bold")
+                debug_ax.set_xticks([])
+                debug_ax.set_yticks([])
+                sbm0 = frames[0].shared_belief_map
+                initial_sbm = np.where(sbm0 < 0, unknown_value, sbm0) if sbm0 is not None else np.full(self.grid.shape, unknown_value, dtype=np.int16)
+                shared_belief_image = debug_ax.imshow(initial_sbm, cmap=knowledge_cmap, vmin=0, vmax=8)
+                shared_belief_ax = debug_ax
+            else:
+                debug_ax.set_facecolor("#0f0f1e")
+                debug_ax.axis("off")
+                shared_belief_image = None
+                shared_belief_ax = None
         else:
             fig_size = (16, 5) if has_single_pair else (max(16, 5 * n_panels), 5)
             fig, axes = plt.subplots(1, n_panels, figsize=fig_size, dpi=120)
@@ -1748,6 +1773,8 @@ class GenericMapSimulation:
                 axes = [axes]
             axes_flat = list(axes)
             debug_ax = None
+            shared_belief_image = None
+            shared_belief_ax = None
 
         world_ax = axes_flat[0]
         initial_grid = frames[0].grid_snapshot if frames[0].grid_snapshot is not None else self.grid
@@ -1821,6 +1848,24 @@ class GenericMapSimulation:
             opp_m.set_visible(False)
             opp_markers.append(opp_m)
 
+        # Shared belief map: role-shaped human agent markers and FOV union overlay
+        sbm_markers: list = []
+        sbm_fov_img = None
+        if shared_belief_ax is not None:
+            human_index = 0
+            for agent in frames[0].agents:
+                if agent.role != "human":
+                    continue
+                color = color_map["human"][human_index % len(color_map["human"])]
+                marker = self._role_marker(agent, human_index)
+                y, x = agent.position
+                m = shared_belief_ax.scatter([x], [y], s=95, c=color, edgecolors="white",
+                                             linewidths=0.9, marker=marker, zorder=5)
+                sbm_markers.append((m, agent.label, human_index))
+                human_index += 1
+            sbm_fov_rgba = np.zeros((H_grid, W_grid, 4), dtype=np.float32)
+            sbm_fov_img = shared_belief_ax.imshow(sbm_fov_rgba, zorder=3)
+
         # Radar threat rings on world panel
         _THREAT_RING_CFG = [
             (7,  "#FF3333", "CRITICAL"),
@@ -1861,7 +1906,7 @@ class GenericMapSimulation:
         legend_text = None
         shared_text = None
         if has_role_agents:
-            if use_grid:
+            if use_grid and not has_shared_belief:
                 legend_text = debug_ax.text(0.05, 0.97, self._role_legend_text(),
                                             color="white", fontsize=10, ha="left", va="top",
                                             fontfamily="monospace", transform=debug_ax.transAxes)
@@ -1987,10 +2032,42 @@ class GenericMapSimulation:
             )
             if shared_text is not None:
                 shared_text.set_text(self._format_shared_coords(state))
+
+            # Shared belief map panel update
+            if shared_belief_image is not None:
+                sbm = state.shared_belief_map
+                if sbm is not None:
+                    shared_belief_image.set_data(np.where(sbm < 0, unknown_value, sbm))
+                captured = set(state.captured_humans or [])
+                escaped = set(state.escaped_humans or [])
+                resolved = captured | escaped
+                pos_by_label = {a.label: a.position for a in state.agents}
+                human_agents = [a for a in state.agents if a.role == "human"]
+                for (m, label, hidx), agent in zip(sbm_markers, human_agents):
+                    if label in resolved:
+                        m.set_visible(False)
+                    else:
+                        y, x = pos_by_label.get(label, agent.position)
+                        m.set_offsets([[x, y]])
+                        _set_scatter_marker(m, self._role_marker(agent, hidx))
+                        m.set_visible(True)
+                if sbm_fov_img is not None:
+                    fov_rgba = np.zeros((H_grid, W_grid, 4), dtype=np.float32)
+                    for agent in state.agents:
+                        if agent.role == "human" and agent.label not in resolved:
+                            for vy, vx in agent.fov:
+                                fov_rgba[vy, vx] = (0.0, 0.83, 1.0, 0.25)
+                    sbm_fov_img.set_data(fov_rgba)
+
             fov_imgs = [img for img, _ in fov_overlays]
+            sbm_marker_artists = [m for m, _, _ in sbm_markers]
             artists = [*world_markers, *hidden_rings, *threat_rings, *ripple_circles,
                        *alien_heard_markers, *knowledge_images, *knowledge_markers,
-                       *fov_imgs, *opp_markers, status_text]
+                       *fov_imgs, *opp_markers, *sbm_marker_artists, status_text]
+            if shared_belief_image is not None:
+                artists.append(shared_belief_image)
+            if sbm_fov_img is not None:
+                artists.append(sbm_fov_img)
             if legend_text is not None:
                 artists.append(legend_text)
             if shared_text is not None:
