@@ -33,6 +33,8 @@ class CoopRoleHumanAgent(RoleHumanAgent):
         super().__init__(start_pos, start_dir, view_length)
         self.shared_map: SharedBeliefMap | None = None
 
+    TEAMMATE_NOISE_BLOCK_RADIUS = 10
+
     # ── Memory initialisation ─────────────────────────────────────────────────
 
     def _init_memory(self, obs) -> None:
@@ -84,6 +86,19 @@ class CoopRoleHumanAgent(RoleHumanAgent):
                         self.shared_map.set_target(self.agent_id, None)
             except Exception:
                 pass
+
+    def _teammates_too_close_for_noise(self) -> bool:
+        if self.shared_map is None:
+            return False
+        for oy, ox in self.shared_map.other_positions(self.agent_id):
+            if abs(self.pos[0] - oy) + abs(self.pos[1] - ox) <= self.TEAMMATE_NOISE_BLOCK_RADIUS:
+                return True
+        return False
+
+    def _update_decoy_loud_noise(self, can_start_noise: bool) -> bool:
+        if self._teammates_too_close_for_noise():
+            can_start_noise = False
+        return super()._update_decoy_loud_noise(can_start_noise)
 
     # ── Step ──────────────────────────────────────────────────────────────────
 
