@@ -1,8 +1,17 @@
+"""Base classes and shared utilities for all agents.
+
+Coordinate convention: all positions are (y, x) / (row, col) throughout.
+
+Exports:
+    Direction, TeamRole          - enums used by every agent
+    cone_fov()                   - directional FOV with wall-blocked line-of-sight
+    direction_from_delta()       - derive Direction from a movement delta
+    BaseAgent, BaseAlienAgent, BaseHumanAgent  - abstract agent hierarchy
+"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from enum import Enum
-from enum import IntEnum
+from enum import Enum, IntEnum
 
 import numpy as np
 
@@ -14,13 +23,26 @@ class Direction(Enum):
     WEST  = 4
 
 
+class TeamRole(IntEnum):
+    NONE   = 0
+    WORKER = 1  # completes mission tiles
+    RUNNER = 2  # stages near exit, escapes when safe
+    DECOY  = 3  # draws alien away from the team
+
+
+# ── Field-of-view ─────────────────────────────────────────────────────────────
+
 def cone_fov(
     grid: np.ndarray,
     origin_yx: tuple[int, int],
     direction: Direction,
     view_length: int,
 ) -> set[tuple[int, int]]:
-    """Return set of (y, x) positions visible from origin_yx in a forward cone."""
+    """Return all (y, x) cells visible from *origin_yx* in a forward cone.
+    
+    The cone spans *view_length* rows deep and widens by one cell per row.
+    Walls (tile 0) and hide spots (tile 3) block line-of-sight.
+    """
     H, W = grid.shape
     BLOCKERS = {0, 3}  # WALL=0, HIDE=3
     oy, ox = origin_yx
@@ -46,13 +68,15 @@ def _cone_target(oy: int, ox: int, direction: Direction, depth: int, lateral: in
 
 
 def _has_los(grid: np.ndarray, start: tuple[int, int], end: tuple[int, int], blockers: set) -> bool:
-    for y, x in _bresenham(start, end)[1:-1]:
+    """True iff no blocker tile lies on the Bresenham line between start and end."""
+    for y, x in _bresenham(start, end)[1:-1]:  # skip endpoints
         if grid[y, x] in blockers:
             return False
     return True
 
 
 def _bresenham(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:
+    """Return all integer cells on the line from start to end (inclusive)."""
     y0, x0 = start
     y1, x1 = end
     dx, dy = abs(x1 - x0), abs(y1 - y0)
@@ -75,7 +99,7 @@ def _bresenham(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, 
 
 
 def direction_from_delta(dy: int, dx: int) -> Direction:
-    """Derive facing direction from a (dy, dx) movement delta."""
+    """Derive the facing Direction from a single-step (dy, dx) delta."""
     if dy == -1:
         return Direction.NORTH
     if dy == 1:
@@ -85,12 +109,14 @@ def direction_from_delta(dy: int, dx: int) -> Direction:
     return Direction.WEST
 
 
-class BaseAgent(ABC):
-    """Common interface for all agents. All positions are (y, x) / (row, col)."""
+# ── Agent base classes ────────────────────────────────────────────────────────
 
-    pos: tuple[int, int]
-    direction: Direction
-    view_length: int
+class BaseAgent(ABC):
+    """Abstract base for every agent. All positions are (y, x) / (row, col)."""
+
+    pos: tuple[int, int]  # current position as (row, col)
+    direction: Direction  # current facing direction, determines FOV cone orientation
+    view_length: int      # how many cells deep the FOV cone reaches
 
     @abstractmethod
     def step(
@@ -99,7 +125,7 @@ class BaseAgent(ABC):
         heard_pos: tuple[int, int] | None = None,
         step_num: int = 0,
     ) -> tuple[int, int]:
-        """Execute one step. Returns new (y, x) position."""
+        """Advance one simulation step. Returns the agent's new (y, x) position."""
         ...
 
     def reset(self, start_pos: tuple[int, int] | None = None) -> None:
@@ -108,35 +134,27 @@ class BaseAgent(ABC):
 
 
 class BaseAlienAgent(BaseAgent):
-    """Alien-role agents. pos=(y,x), directional cone FOV. Aliens cannot hide."""
+    """Alien-role agents. Carries a reference to the full grid for pathfinding."""
 
-    grid: np.ndarray
+    grid: np.ndarray  # full map; used for A* / BFS pathfinding and tile queries
 
 
 class BaseHumanAgent(BaseAgent):
-    """Human-role agents. pos=(y,x), directional cone FOV, can hide.
+    """Human-role agents. Can hide; receives radar and observation updates each step.
 
-    The simulation calls observe() once per step before calling step(), giving
-    the agent its current observation and radar state.
+    The simulation calls ``observe()`` before ``step()`` every turn so the agent
+    can update its internal knowledge map and radar state first.
     """
 
-    hidden: bool = False
-    exit_open: bool = False
-    # Team role (WORKER / RUNNER / DECOY / etc.). May be None when unassigned.
-    team_role: "TeamRole | None" = None
+    hidden: bool = False              # True when the agent is inside a HIDE tile
+    exit_open: bool = False           # set by simulation once all missions are completed
+    team_role: "TeamRole | None" = None  # assigned role (WORKER/RUNNER/DECOY); None if uncoordinated
 
     def observe(
         self,
-        obs: np.ndarray,
-        radar_threat: str | None = None,
-        radar_dist: int | None = None,
+        _obs: np.ndarray,
+        _radar_threat: str | None = None,
+        _radar_dist: int | None = None,
     ) -> None:
-        """Ingest this step's observation. No-op by default (random agents)."""
+        """Ingest this step's observation array and radar reading. No-op by default."""
         pass
-
-
-class TeamRole(IntEnum):
-    NONE = 0
-    WORKER = 1
-    RUNNER = 2
-    DECOY = 3
