@@ -125,7 +125,7 @@ All roles share the survival priority: hiding overrides role-specific tasks when
 
 ### Mission system (`simulation.py`)
 
-Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-count`, default 2). A human must stand on a mission tile for `--mission-steps` consecutive steps (minimum 20) to complete it. The exit is **locked** until all missions are completed. The simulation tracks dwell progress in `_mission_dwell_progress` and notifies role-aware agents via coord messages when a mission completes.
+Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-count`, default 2). A human must accumulate `--mission-steps` steps on a mission tile to complete it (default 10); steps do not need to be consecutive — progress persists if the agent leaves and returns. The exit is **locked** until all missions are completed. The simulation tracks dwell progress in `_mission_dwell_progress` and notifies role-aware agents via coord messages when a mission completes.
 
 ### Simulation loop (`simulation.py`)
 
@@ -140,7 +140,7 @@ Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-
 Key mechanics (active when `enable_mechanics=True`; disabled for `--demo random`):
 
 - **Radar**: topology-aware BFS distance → CRITICAL/CLOSE/NEAR/FAR every `radar_interval` steps
-- **Noise**: player emits a jittered sound position each step with `p_noise` probability; suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
+- **Noise**: player emits a jittered sound position each step with `p_noise` probability (default 0.05, configurable via `--noise-prob`); suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
 - **Cone FOV**: both agent types use `cone_fov()` — directional, wall/hide-blocked LoS via Bresenham
 
 ### Visualization (`simulation.py` render)

@@ -70,8 +70,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--human-view", type=int, default=6, help="Human observation radius (default: 6)")
     parser.add_argument("--alien-fov", type=int, default=6, help="Alien FOV radius (default: 6)")
     parser.add_argument("--noise-radius", type=int, default=2, help="Max cell offset for player noise (default: 2)")
-    parser.add_argument("--mission-steps", type=int, default=20,
-                        help="Steps required to complete each mission tile (minimum enforced: 20, default: 20)")
+    parser.add_argument("--noise-prob", type=float, default=0.05, help="Probability of emitting noise each step (default: 0.05)")
+    parser.add_argument("--mission-steps", type=int, default=10,
+                        help="Steps required to complete each mission tile (default: 10)")
     parser.add_argument("--mission-count", type=int, default=2,
                         help="Number of mission tiles to place (default: 2)")
     parser.add_argument("--random-map", action="store_true",
@@ -187,6 +188,7 @@ def main():
         default_human_view=args.human_view,
         default_alien_view=args.alien_fov,
         enable_mechanics=(args.demo == "rule"),
+        p_noise=args.noise_prob,
         noise_radius=args.noise_radius,
         seed=args.seed,
         mission_steps=args.mission_steps,
