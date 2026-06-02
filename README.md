@@ -1,25 +1,26 @@
 # AASMA — Asymmetric Agents in a Hide-and-Seek Game
 
-An Alien Isolation-inspired asymmetric pursuit-evasion game with procedurally generated maps, rule-based and random agent baselines, and a flexible simulation framework.
+An Alien Isolation-inspired asymmetric pursuit-evasion game with procedurally generated maps, multi-agent coordination, and a flexible simulation framework for studying cooperative escape strategies.
 
 ---
 
 ## The Game
 
-Two agents compete on a partially-observable grid map:
+Three human agents compete against one alien on a partially-observable grid map:
 
-| Agent             | Goal                                | Abilities                          |
-|-------------------|-------------------------------------|------------------------------------|
-| **Human** (blue)  | Reach the exit without being caught | Walk, wait, hide in hiding spots   |
-| **Alien** (red)   | Catch the human before it escapes   | Walk, wait, teleport through vents |
+| Agent            | Goal                                          | Abilities                                  |
+|------------------|-----------------------------------------------|--------------------------------------------|
+| **Humans** (blue)| Complete all missions, then reach the exit    | Walk, wait, hide in hiding spots           |
+| **Alien** (red)  | Catch all humans before they escape           | Walk, wait, teleport through vents (faster)|
 
 **Key mechanics:**
 
-- **Partial observation** — the human sees a directional forward cone; the alien has an omnidirectional FOV blocked by walls and hiding spots.
-- **Radar** — every few steps the human receives a threat-level ping (CRITICAL / CLOSE / NEAR / FAR) based on path distance to the alien.
-- **Noise** — each step the human has a chance to emit a sound at a jittered position; the alien hears this and uses it to track the human.
-- **Hiding spots** — the human can enter a hiding spot to break line-of-sight and suppress sound emission.
-- **Vents** — the alien can teleport between observed vents when it would save significant distance.
+- **Missions** — humans must stand on mission tiles for 20 consecutive steps each; the exit is locked until all missions are complete.
+- **Partial observation** — humans see a directional forward cone; the alien has a wider omnidirectional FOV blocked by walls and hiding spots.
+- **Radar** — every few steps each human receives a threat-level ping (CRITICAL / CLOSE / NEAR / FAR) based on path distance to the alien.
+- **Noise** — each step a human has a chance to emit a sound at a jittered position; the alien hears this and uses it to track humans.
+- **Hiding spots** — a human inside a hiding spot breaks line-of-sight and suppresses sound emission; the alien cannot enter unless it already saw the human hide there.
+- **Vents** — the alien can teleport between vents when it would save significant distance (≥4 steps savings, sound distance ≥8).
 
 ---
 
@@ -31,14 +32,20 @@ git clone <repo>
 cd AASMA
 pip install numpy matplotlib
 
-# Run a rule-based game (produces a GIF)
-python scripts/run.py --demo rule --no-show
+# Role-based team of 3 humans vs rule-based alien (2 missions)
+python run.py --human-class role --no-show
 
-# Run with random agents
-python scripts/run.py --demo random --no-show
+# Shared-map cooperative team
+python run.py --human-class coop --no-show
 
-# Show the world map only (no knowledge panels)
-python scripts/run.py --demo rule --style world --no-show
+# Omniscient upper-bound (full map/missions/exit pre-known)
+python run.py --human-class omniscient --no-show
+
+# Random baseline agents
+python run.py --demo random --no-show
+
+# Run without producing a GIF (faster, for debugging)
+python run.py --human-class role --no-render
 ```
 
 Output is saved to `output/simulation.gif` by default.
@@ -50,33 +57,44 @@ Output is saved to `output/simulation.gif` by default.
 ```
 AASMA/
 ├── agents/
-│   ├── alien.py          — rule-based alien (A*, belief map, FSM, vent routing)
-│   ├── human.py          — rule-based human (BFS, hiding, radar-reactive)
-│   ├── role_human.py     — role-aware human (WORKER / DECOY / RUNNER support)
-│   ├── role_manager.py   — greedy role assignment helpers (WORKER/DECOY/RUNNER)
-│   ├── random_alien.py   — random alien baseline (vent teleport + walk)
-│   └── random_human.py   — random human baseline (simple random walk)
-├── map_generator.py      — procedural map generation + PNG visualization
-├── simulation.py         — simulation engine (game loop, rendering, GIF output)
-├── scripts/
-│   └── run.py            — unified CLI entry point
-├── training/             — RL training pipeline (WIP)
-├── maps/                 — saved map JSON files
-└── output/               — generated GIFs and PNGs
+│   ├── base.py               — BaseAgent, BaseHumanAgent, BaseAlienAgent, Direction, TeamRole
+│   ├── rule_human.py         — rule-based human (BFS, hiding, radar-reactive, no coordination)
+│   ├── role_human.py         — role-aware human (WORKER / DECOY / RUNNER + coord bus)
+│   ├── coop_role_human.py    — cooperative human (shared belief map + role coordination)
+│   ├── omniscient_human.py   — upper-bound human (full map/missions/exit pre-known)
+│   ├── random_human.py       — random human baseline
+│   ├── rule_alien.py         — rule-based alien (A*, belief map, FSM, vent routing)
+│   ├── random_alien.py       — random alien baseline
+│   ├── role_manager.py       — greedy role assignment helpers (WORKER/DECOY/RUNNER)
+│   ├── coord_bus.py          — inter-agent coordinate message bus
+│   └── shared_belief.py      — shared belief map for cooperative agents
+├── map_generator.py          — procedural map generation + PNG visualization
+├── simulation.py             — simulation engine (game loop, rendering, GIF output)
+├── run.py                    — unified CLI entry point
+├── evaluate_agents.py        — multi-episode evaluation across all human/alien pairings
+├── training/                 — RL training pipeline (partially broken — see below)
+├── maps/                     — cached map JSON files
+└── output/                   — generated GIFs, PNGs, and evaluation plots
 ```
 
 ---
 
 ## Running Simulations
 
-All simulation options go through `scripts/run.py`:
+All simulation options go through `run.py`. Defaults are **3 humans**, **2 missions**, **rule-based alien**.
 
 ```
-python scripts/run.py [options]
+python run.py [options]
 
---demo {rule,random}     Agent pair to use (default: rule)
---style {full,world}     full = world + knowledge panels; world = world only (default: full)
---knowledge {on,off}     Show per-agent knowledge panels (default: on)
+--demo {rule,random}     Agent pair preset: 'rule' enables mechanics, 'random' disables them (default: rule)
+--human-class {human,role,coop,omniscient,random}
+                         Human agent implementation (default: human)
+--alien-class {alien,random}
+                         Alien agent implementation (default: alien)
+--human-count N          Number of human agents (default: 3)
+--alien-count N          Number of alien agents (default: 1)
+--mission-count N        Number of mission tiles (default: 2)
+--mission-steps N        Steps to dwell on each mission tile (minimum 20, default: 20)
 --seed N                 Map and agent seed (default: 42)
 --width N                Map width in cells (default: 50)
 --height N               Map height in cells (default: 35)
@@ -84,29 +102,97 @@ python scripts/run.py [options]
 --max-steps N            Episode length cap (default: 300)
 --fps N                  GIF frames per second (default: 12)
 --output PATH            Output GIF path (default: output/simulation.gif)
+--style {full,world}     full = world + knowledge panels; world = world only (default: full)
+--knowledge {on,off}     Show per-agent knowledge panels in the GIF (default: on)
 --no-show                Skip interactive preview window
+--no-render              Skip GIF rendering (useful for debug/headless runs)
+--random-map             Use a random seed for map generation
+--min-start-distance N   Minimum BFS distance between human and alien spawn (default: 0)
 --human-view N           Human observation radius (default: 6)
 --alien-fov N            Alien FOV radius (default: 6)
+--noise-radius N         Max cell offset for ambient noise (default: 2)
 ```
 
-**Examples:**
+### Agent configurations
 
 ```bash
-# Alien-favoured map, world view only
-python scripts/run.py --alpha 0.8 --style world --no-show
+# Rule-based single human, no missions (classic escape)
+python run.py --human-class human --human-count 1 --mission-count 0 --no-show
 
-# Player-favoured map, longer episode
-python scripts/run.py --alpha -0.5 --max-steps 500 --seed 7 --no-show
+# Random agents (no mechanics — exact positions, no radar/noise)
+python run.py --demo random --no-show
 
-# Random agents, no knowledge panels
-python scripts/run.py --demo random --knowledge off --no-show
+# Role-based team: WORKER completes missions, DECOY distracts, RUNNER escapes
+python run.py --human-class role --no-show
+
+# Cooperative team: shared belief map so all agents explore together
+python run.py --human-class coop --no-show
+
+# Omniscient upper-bound: full map + all missions + exit pre-known
+python run.py --human-class omniscient --no-show
+
+# World view only (no per-agent knowledge panels)
+python run.py --human-class role --style world --no-show
+
+# Alien-favoured map (more vents)
+python run.py --human-class role --alpha 0.8 --no-show
+
+# Player-favoured map (more hiding spots), longer episode
+python run.py --human-class role --alpha -0.5 --max-steps 500 --no-show
+
+# Ensure a minimum safe starting distance
+python run.py --human-class role --min-start-distance 20 --no-show
+
+# Verification run (quick sanity check after changes)
+python run.py --human-class human --human-count 1 --mission-count 0 --no-show --output output/verify.gif && echo "OK"
+```
+
+---
+
+## Evaluation
+
+`evaluate_agents.py` runs all human/alien pairings across multiple episodes and produces bar charts and CSV summaries.
+
+```bash
+# Quick evaluation (10 episodes per pairing)
+python evaluate_agents.py --episodes 10 --no-show
+
+# Full evaluation (default 30 episodes, saves plots to output/eval_pairs/)
+python evaluate_agents.py --no-show
+
+# Custom map sizes
+python evaluate_agents.py --map-sizes 30x20 45x30 60x40 --no-show
+```
+
+**Pairings evaluated:**
+
+- Human models: `random_human`, `rule_human`, `omniscient_human`, `role_human_3`, `coop_role_human_3`
+- Alien models: `random_alien`, `rule_alien`
+
+**Outputs** (in `output/eval_pairs/`):
+
+- Per-pairing bar chart: distribution of how many humans escaped (0/1/2/3)
+- Per-pairing `summary.csv` with escaped percentages and average steps
+- `rule_alien_human_comparison.png`: stacked bar chart comparing all human models vs the rule alien
+
+**Key flags:**
+
+```text
+--episodes N         Episodes per matchup (default: 30)
+--seed N             Base random seed (default: 42)
+--map-sizes W1xH1 …  Map sizes to test (default: 60x40)
+--max-steps N        Per-episode step cap (default: 1000)
+--view-length N      Observation radius for all agents (default: 6)
+--idle-limit N       Steps of no movement before forcing episode end (default: 50)
+--output-dir PATH    Output directory (default: output/eval_pairs)
+--no-show            Do not open matplotlib windows
 ```
 
 ---
 
 ## Map Generator
 
-Maps are procedurally generated with a single `alpha` parameter that shifts the balance:
+Maps are procedurally generated with a single `alpha` parameter:
 
 | alpha | Effect                                          |
 |-------|-------------------------------------------------|
@@ -116,77 +202,111 @@ Maps are procedurally generated with a single `alpha` parameter that shifts the 
 
 **Tile types:**
 
-| Tile          | Value | Description                         |
-|---------------|-------|-------------------------------------|
-| WALL          | 0     | Impassable                          |
-| FLOOR         | 1     | Passable by both                    |
-| VENT          | 2     | Alien teleport network              |
-| HIDE          | 3     | Human hiding spot, blocks alien FOV |
-| PLAYER_START  | 4     | Human spawn                         |
-| ALIEN_START   | 5     | Alien spawn                         |
-| EXIT          | 6     | Human goal                          |
-
-**CLI usage:**
+| Tile         | ID | Description                                    |
+|--------------|----|------------------------------------------------|
+| WALL         | 0  | Impassable by all                              |
+| FLOOR        | 1  | Passable by all                                |
+| VENT         | 2  | Alien teleport network                         |
+| HIDE         | 3  | Human hiding spot; blocks alien FOV            |
+| PLAYER_START | 4  | Human spawn point                              |
+| ALIEN_START  | 5  | Alien spawn point                              |
+| EXIT         | 6  | Human goal (locked until all missions done)    |
+| MISSION      | 7  | Mission tile (dwell for 20 steps to complete)  |
 
 ```bash
 # Print map to terminal
-python map_generator.py [seed] [--width N] [--height N]
+python map_generator.py 42
 
 # Save PNG visualizations to output/
-python map_generator.py [seed] --visualize
+python map_generator.py 42 --visualize
 ```
 
 ---
 
-## Agents
+## Agent Architecture
 
-There are three principal agent families in the codebase — each useful for different experiments and demonstrations:
+### Hierarchy
 
-- **Random agents** (`agents/random_human.py`, `agents/random_alien.py`) — very simple baselines that choose random valid moves (and the random alien optionally vents). They are role-unaware and do not participate in coordination or emit deliberate loud-noise. Useful as low-skill baselines and for testing the simulation plumbing.
+```plaintext
+BaseAgent (ABC)                  agents/base.py         pos:(y,x), direction, step(), reset()
+├── BaseAlienAgent                                       + grid
+│   ├── AlienAgent               agents/rule_alien.py   FSM (SEARCH/INVESTIGATE/HUNT) + A* + BeliefMap
+│   └── RandomAlienAgent         agents/random_alien.py
+└── BaseHumanAgent                                       + hidden, observe()
+    ├── HumanAgent               agents/rule_human.py   BFS navigation, radar-reactive, no coordination
+    ├── RoleHumanAgent           agents/role_human.py   role-aware (WORKER/DECOY/RUNNER) + coord bus
+    │   ├── CoopRoleHumanAgent   agents/coop_role_human.py  shared belief map + role coordination
+    │   └── OmniscientHumanAgent agents/omniscient_human.py full map/missions/exit pre-known
+    └── RandomHumanAgent         agents/random_human.py
+```
 
-- **Rule-based agents (no coordination)** (`agents/human.py`, `agents/alien.py`) — the original game-play agents. The human implements a priority-driven BFS/steering policy (hide, explore, go-to-exit) and responds to radar/noise signals; the alien runs an FSM (SEARCH / INVESTIGATE / HUNT) with belief-tracking and vent routing. These agents operate independently and do not use inter-agent coord messages or team roles.
+All agents implement `step(player_pos, heard_pos, step_num) → (y,x)`. Human agents additionally expose `observe(obs, radar_threat, radar_dist)` called before `step()` each turn.
 
-- **Role-based coordination (first version)** (`agents/role_human.py` + `agents/role_manager.py` + `simulation.py` support) — role-aware humans expose `team_role`, `flush_outbox()` and `receive_coords()` for a simple coord-bus. Agents can publish `CoordMessage` for `EXIT` and `MISSION`; the simulation relays messages to teammates and maintains light shared state (`shared_mission_coords`, `shared_exit_coord`). Role reassignment is event-driven (missions discovered/completed, worker captured, exit opened) and uses greedy assignment helpers. Important: this coordination design shares sparse coordinate messages and assigned roles, not full per-agent knowledge maps — agents keep their own memory and observations.
+### Human agent comparison
 
-Overview of differences
+| Agent                 | Map knowledge | Coordination           | Roles               | Use case                   |
+|-----------------------|---------------|------------------------|---------------------|----------------------------|
+| `RandomHumanAgent`    | None          | None                   | None                | Baseline / plumbing tests  |
+| `HumanAgent`          | Own FOV       | None                   | None                | Single-agent behaviour     |
+| `RoleHumanAgent`      | Own FOV       | Coord bus (sparse)     | WORKER/DECOY/RUNNER | Team strategy experiments  |
+| `CoopRoleHumanAgent`  | Shared map    | Coord bus + shared map | WORKER/DECOY/RUNNER | Cooperative exploration    |
+| `OmniscientHumanAgent`| Full map      | Coord bus              | WORKER/DECOY/RUNNER | Upper-bound performance    |
 
-- **Information sharing:** Random and rule-based (no coordination) agents have no teammate messaging. Role-based coordination shares only coordinate messages (not a full shared world view).
-- **Role semantics:** Only role-based agents expose `team_role` (WORKER/DECOY/RUNNER) and the sim performs event-driven reassignment; rule-based agents have no team roles.
-- **Noise / deliberate signals:** All mechanics (radar, ambient noise) exist for rule-based and role-based agents when `enable_mechanics=True`. Role-based agents can also set `made_loud_noise` for deliberate signals that the sim forwards to aliens as an exact heard position.
-- **Use cases:** Use random agents for baselines and plumbing tests; use rule-based (no coordination) for single-agent behaviour and classic evaluations; use role-based coordination when experimenting with simple team strategies, mission allocation, and coordinated distraction/defence behaviours.
+### Role semantics (RoleHumanAgent and subclasses)
 
-See `ROLES_README.md` for a developer-oriented explanation of the current coordination implementation and APIs.
+- **WORKER** — navigates to nearest uncompleted mission tile and dwells until done.
+- **DECOY** — repositions to draw the alien away from active missions; emits deliberate loud noise when threat is NEAR/FAR.
+- **RUNNER** — stages near the exit; escapes as soon as threat drops to FAR; never completes missions.
+
+All roles share a **survival priority**: hiding overrides role tasks when radar threat is CRITICAL or CLOSE. Once all missions complete, all roles converge to exit-seeking.
+
+Role assignment is **event-driven**: missions are discovered/completed, workers are caught, exits unlock. `role_manager.py` provides `assign_worker_greedy`, `assign_decoy_farthest`, `assign_runner_greedy`.
+
+### Coordination mechanisms
+
+**Coord bus** (`agents/coord_bus.py`): `CoordMessage` with `CoordType.MISSION`, `MISSION_DONE`, or `EXIT`. Agents call `flush_outbox()` / `receive_coords()` each step; the simulation relays messages between teammates. Shares sparse coordinate events — not full world state.
+
+**Shared belief map** (`agents/shared_belief.py`): used by `CoopRoleHumanAgent`. All agents in a team alias their `_known_map` to the same `SharedBeliefMap.known_map` array, so any cone observation is immediately visible to teammates. Agents also register navigation targets to avoid redundant exploration.
+
+### Alien agent (FSM)
+
+- **SEARCH**: explores unknown frontiers, falls back to patrol waypoints.
+- **INVESTIGATE**: moves to last known / last heard position.
+- **HUNT** (speed=2): pursues visible human; unlocks `PASSABLE_ALIEN_RUSH` (enters HIDE tiles) only if the alien was already in HUNT when it saw the human hide.
+
+Vent teleportation triggers only when path savings exceed 4 steps and sound distance exceeds 8.
 
 ---
 
-## Simulation Engine (`simulation.py`)
-`GenericMapSimulation` runs the game loop and renders output GIFs. It supports agents that expose either a `step(player_pos, heard_pos, step_num)` or `_act(obs, radar_threat, radar_dist)` interface.
+## Interpreting outputs
 
-**Key parameters:**
+**GIF panels** (default `--style full`):
 
-```python
-GenericMapSimulation(
-        grid,
-        agents,                  # list of AgentSpec
-        knowledge_mode="on",   # record per-agent knowledge maps for rendering
-        enable_mechanics=True,   # enables radar, noise, cone observation
-        p_noise=0.1,             # probability of stochastic sound events per step
-        radar_interval=5,        # steps between radar pings
-)
-```
+- **World panel**: map with all agents, FOV cones, radar threat rings, noise ripple, role labels (WORKER/DECOY/RUNNER), and mission/exit markers.
+- **Per-agent knowledge panels**: what each human or alien believes about the map (explored vs unknown tiles, known mission/exit coords).
 
-When `enable_mechanics=False` (commonly used with random agents), radar/noise/cone mechanics are disabled and agents receive exact observations.
+**Outcome messages** printed to stdout:
 
+- `ESCAPED` — all surviving humans reached the exit.
+- `CAUGHT` — all humans were caught before escaping.
+- `TIMEOUT` — episode reached `--max-steps` with neither outcome.
 
-**Coordination & roles
+**Evaluation plots** (from `evaluate_agents.py`):
 
-Basic role support exists for role-aware human agents (`WORKER`, `DECOY`, `RUNNER`). Role-aware agents expose coordination hooks (outbox/receive) and may set deliberate loud-noise signals; the simulation performs event-driven reassignment and maintains shared mission/exit coordinates.
+- Bar height = number of episodes where exactly N humans escaped.
+- Colour coding in the comparison chart: red=0 escaped, orange=1, green=2, blue=3.
 
-For a full developer-oriented description, implementation notes, and API examples, see `ROLES_README.md`.
-Notes & experimental tips
+---
 
-- Role-based reassignment is deterministic given the sim seed and current agent positions; this is helpful for reproducible experiments.
-- If you want fixed roles for ablation studies, call `sim.enable_role_based(False)` and use `sim.set_initial_roles(...)`.
-- Random agents (`RandomHumanAgent`, `RandomAlienAgent`) are role-unaware and will not interact with the coord-bus even if mixed into the sim.
+## Training (partially broken)
 
-The above replaces the earlier brief summary; see `ROLES_README.md` for an expanded developer-oriented description and implementation notes.
+`training/envs.py` imports `from game import Game` — a module that no longer exists — so the gymnasium environments do not run. The obs/reward logic in `training/obs_rewards.py` is intact and importable.
+
+The planned staged training (`train_staged.py`) uses a 4-phase PPO curriculum:
+
+1. Human vs rule-based alien until >20% escape rate
+2. Alien vs rule-based human until >30% catch rate
+3. Both vs historical checkpoint pools
+4. Full AET co-training
+
+Observation space: 128-float vector. Action space: 6 discrete actions (WAIT + 4 walks + LOUD_NOISE).

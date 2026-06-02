@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a simulation with rule-based or random agents")
     parser.add_argument("--demo", choices=["random", "rule"], default="rule",
                         help="Agent type: 'rule' for rule-based, 'random' for random (default: rule)")
-    parser.add_argument("--human-count", type=int, default=1, help="Number of human agents to create (default: 1)")
+    parser.add_argument("--human-count", type=int, default=3, help="Number of human agents to create (default: 3)")
     parser.add_argument("--human-class", choices=["random", "human", "role", "coop", "omniscient"], default="human",
                         help="Human agent implementation: 'human' (rule), 'role' (role-aware), 'coop' (shared-map cooperative), 'omniscient' (upper-bound: full map/missions/exit pre-known), or 'random' (default: human)")
     parser.add_argument("--alien-count", type=int, default=1, help="Number of alien agents to create (default: 1)")
@@ -72,8 +72,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--noise-radius", type=int, default=2, help="Max cell offset for player noise (default: 2)")
     parser.add_argument("--mission-steps", type=int, default=20,
                         help="Steps required to complete each mission tile (minimum enforced: 20, default: 20)")
-    parser.add_argument("--mission-count", type=int, default=0,
-                        help="Number of mission tiles to place (default: 0)")
+    parser.add_argument("--mission-count", type=int, default=2,
+                        help="Number of mission tiles to place (default: 2)")
     parser.add_argument("--random-map", action="store_true",
                         help="Use a random seed for map/agent generation")
     parser.add_argument("--min-start-distance", type=int, default=0,

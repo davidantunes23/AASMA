@@ -13,20 +13,26 @@ pip install stable-baselines3
 ## Common Commands
 
 ```bash
-# Run rule-based simulation (produces output/simulation.gif)
-python run.py --demo rule --seed 42
+# Run role-based simulation with 3 humans and 2 missions (default)
+python run.py --human-class role --seed 42
 
 # Debug run — skips GIF rendering, prints per-step alien state
-python run.py --demo rule --seed 42 --no-render
+python run.py --human-class role --seed 42 --no-render
 
-# Random baseline agents
+# Cooperative shared-map agents
+python run.py --human-class coop --seed 42 --no-show
+
+# Omniscient upper-bound humans (full map/missions/exit pre-known)
+python run.py --human-class omniscient --seed 42 --no-show
+
+# Single rule-based human, no missions (classic escape)
+python run.py --human-class human --human-count 1 --mission-count 0 --no-show
+
+# Random baseline agents (mechanics disabled)
 python run.py --demo random --seed 42 --no-show
 
-# Role-based coordination (3 humans: WORKER + DECOY + RUNNER)
-python run.py --human-count 3 --human-class role --mission-count 3 --no-show
-
 # World-only view (no knowledge panels)
-python run.py --demo rule --style world --no-show --seed 42
+python run.py --human-class role --style world --no-show --seed 42
 
 # Alien-favoured map (more vents), player-favoured (more hiding spots)
 python run.py --alpha 0.8 --seed 42 --no-show
@@ -41,11 +47,14 @@ python map_generator.py 42
 # Save map PNG visualizations
 python map_generator.py 42 --visualize
 
+# Multi-episode evaluation across all human/alien pairings
+python evaluate_agents.py --episodes 10 --no-show
+
 # Verification command (use after any change)
-python run.py --demo rule --no-show --output output/verify.gif && echo "OK"
+python run.py --human-class human --human-count 1 --mission-count 0 --no-show --output output/verify.gif && echo "OK"
 ```
 
-Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps`, `--fps`, `--noise-radius`, `--human-view`, `--alien-fov`, `--knowledge {on,off}`, `--style {full,world}`, `--no-render`, `--no-show`, `--random-map`, `--min-start-distance`, `--human-count`, `--human-class {human,role,random}`, `--alien-count`, `--alien-class {alien,random}`, `--mission-count`, `--mission-steps`.
+Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps`, `--fps`, `--noise-radius`, `--human-view`, `--alien-fov`, `--knowledge {on,off}`, `--style {full,world}`, `--no-render`, `--no-show`, `--random-map`, `--min-start-distance`, `--human-count` (default: 3), `--human-class {human,role,coop,omniscient,random}`, `--alien-count`, `--alien-class {alien,random}`, `--mission-count` (default: 2), `--mission-steps`.
 
 ## Architecture
 
@@ -65,14 +74,16 @@ Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps`, `
 ### Agent hierarchy (`agents/`)
 
 ```plaintext
-BaseAgent (ABC)               agents/base.py   pos:(y,x), direction, view_length, step(), reset()
-├── BaseAlienAgent                                   + grid
-│   ├── AlienAgent            agents/rule_alien.py  FSM + A* + BeliefMap + KnowledgeMap
-│   └── RandomAlienAgent      agents/random_alien.py
-└── BaseHumanAgent                                   + hidden, observe()
-    ├── HumanAgent            agents/rule_human.py  BFS navigation, radar-reactive, no coordination
-    ├── RoleHumanAgent        agents/role_human.py  role-aware, coord bus, WORKER/DECOY/RUNNER
-    └── RandomHumanAgent      agents/random_human.py
+BaseAgent (ABC)                  agents/base.py            pos:(y,x), direction, view_length, step(), reset()
+├── BaseAlienAgent                                          + grid
+│   ├── AlienAgent               agents/rule_alien.py      FSM + A* + BeliefMap + KnowledgeMap
+│   └── RandomAlienAgent         agents/random_alien.py
+└── BaseHumanAgent                                          + hidden, observe()
+    ├── HumanAgent               agents/rule_human.py      BFS navigation, radar-reactive, no coordination
+    ├── RoleHumanAgent           agents/role_human.py      role-aware, coord bus, WORKER/DECOY/RUNNER
+    │   ├── CoopRoleHumanAgent   agents/coop_role_human.py shared belief map + role coordination
+    │   └── OmniscientHumanAgent agents/omniscient_human.py full map/missions/exit pre-known at start
+    └── RandomHumanAgent         agents/random_human.py
 ```
 
 `Direction`, `cone_fov()`, `TeamRole`, and `direction_from_delta()` live in `agents/base.py`.
@@ -81,7 +92,7 @@ BaseAgent (ABC)               agents/base.py   pos:(y,x), direction, view_length
 
 **Adding a new agent**: subclass `BaseAlienAgent` or `BaseHumanAgent`, implement `step()` (and `observe()` for humans), then wrap with `build_agent_spec(label, role, agent)` from `simulation.py`.
 
-### AlienAgent state machine (`agents/alien.py`)
+### AlienAgent state machine (`agents/rule_alien.py`)
 
 - **SEARCH**: explores unknown frontiers, falls back to patrol waypoints
 - **INVESTIGATE**: moves to last known / last heard position
@@ -104,9 +115,17 @@ Transition to HUNT-with-hiding only fires if the alien was **already in HUNT** w
 
 All roles share the survival priority: hiding overrides role-specific tasks when radar threat is CRITICAL or CLOSE. After all missions complete, all roles converge to exit-seeking.
 
+### Cooperative shared-map agents (`agents/coop_role_human.py`, `agents/shared_belief.py`)
+
+`CoopRoleHumanAgent` extends `RoleHumanAgent` with a `SharedBeliefMap`. All agents in a team alias their `_known_map` to the same `SharedBeliefMap.known_map` array so any cone observation is immediately visible to teammates. Agents also register navigation targets so the frontier BFS prefers cells not already claimed by a teammate. Degrades gracefully to solo `RoleHumanAgent` when used alone.
+
+### Omniscient agents (`agents/omniscient_human.py`)
+
+`OmniscientHumanAgent` extends `RoleHumanAgent`. At construction the full grid, all exit coordinates, and all mission positions are pre-loaded into the agent's knowledge. Alien position is **not** included — the agent still reacts to radar threats. Used as an upper-bound performance baseline.
+
 ### Mission system (`simulation.py`)
 
-Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-count`). A human must stand on a mission tile for `--mission-steps` consecutive steps (minimum 20) to complete it. The exit is **locked** until all missions are completed. The simulation tracks dwell progress in `_mission_dwell_progress` and notifies role-aware agents via coord messages when a mission completes.
+Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-count`, default 2). A human must stand on a mission tile for `--mission-steps` consecutive steps (minimum 20) to complete it. The exit is **locked** until all missions are completed. The simulation tracks dwell progress in `_mission_dwell_progress` and notifies role-aware agents via coord messages when a mission completes.
 
 ### Simulation loop (`simulation.py`)
 
@@ -134,9 +153,13 @@ Render produces a multi-panel GIF: **World** panel + per-agent knowledge panels.
 
 `MapGenerator(width, height, alpha, seed)` — `alpha ∈ [-1, 1]`: negative = more HIDE tiles, positive = more VENT tiles. Pre-generated maps cached as JSON in `maps/`.
 
+### Evaluation (`evaluate_agents.py`)
+
+Runs all human/alien pairings (random, rule, omniscient, role, coop humans × random and rule aliens) across multiple episodes with a fixed map alpha. Produces per-pairing bar charts, CSV summaries, and a stacked comparison chart for all human models vs the rule alien. Output goes to `output/eval_pairs/` by default.
+
 ### Training (`training/`)
 
-**Partially broken.** `training/envs.py` (`BaseAETEnv`, `AlienEnv`, `PlayerEnv`) imports `from game import Game` — a module that no longer exists — so the gymnasium environments do not run. The obs/reward logic in `training/obs_rewards.py` is intact and importable. `evaluate_rule_agents.py` also imports `from game import Game` and is broken for the same reason.
+**Partially broken.** `training/envs.py` (`BaseAETEnv`, `AlienEnv`, `PlayerEnv`) imports `from game import Game` — a module that no longer exists — so the gymnasium environments do not run. The obs/reward logic in `training/obs_rewards.py` is intact and importable.
 
 The staged training design (`train_staged.py`) targets a 4-phase PPO curriculum:
 
