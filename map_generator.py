@@ -257,7 +257,6 @@ class MapGenerator:
         self._place_rooms()
         self._connect_rooms()
         self._place_special_tiles()
-        self._validate_connectivity()
         self._compute_metadata()
 
         return self.grid.copy()
@@ -293,26 +292,6 @@ class MapGenerator:
         with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
         print(f"Saved -> {path}")
-
-    @classmethod
-    def load(cls, path: str) -> "MapGenerator":
-        with open(path) as f:
-            data = json.load(f)
-        m = data["metadata"]
-        gen = cls(
-            width=m["width"],
-            height=m["height"],
-            alpha=m["alpha"],
-            seed=m["seed"],
-            max_hides_per_room=m.get("hide_max_per_room", 3),
-            mission_count=m.get("mission_count", 0),
-        )
-        gen.grid = np.array(data["grid"], dtype=np.int8)
-        gen.metadata = m
-        gen.player_pos = tuple(m["player_start"])
-        gen.alien_pos = tuple(m["alien_start"])
-        gen.exit_pos = tuple(m["exit_pos"])
-        return gen
 
     # ── Room placement ──────────────────────────────────────────────────────────
     def _place_rooms(self):
@@ -467,25 +446,6 @@ class MapGenerator:
                     my, mx = self.rng.choice(candidates)
                     self.grid[my, mx] = Tile.MISSION
                     special_tiles.add((mx, my))
-
-    # ── Connectivity validation ─────────────────────────────────────────────────
-    def _validate_connectivity(self):
-        passable = {
-            Tile.FLOOR,
-            Tile.VENT,
-            Tile.HIDE,
-            Tile.PLAYER_START,
-            Tile.ALIEN_START,
-            Tile.EXIT,
-            Tile.MISSION,
-        }
-        reachable = self._bfs_reachable(self.player_pos, passable)
-
-        for target, name in [(self.exit_pos, "exit"), (self.alien_pos, "alien start")]:
-            if target not in reachable:
-                print(f"[WARNING] {name} not reachable — carving fallback corridor.")
-                self._h_corridor(self.player_pos[1], self.player_pos[0], target[0])
-                self._v_corridor(target[0], self.player_pos[1], target[1])
 
     def _bfs_reachable(self, start, passable) -> set:
         visited = {start}
