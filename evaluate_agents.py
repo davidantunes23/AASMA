@@ -43,9 +43,9 @@ except ModuleNotFoundError:
 
 
 MISSION_COUNT = 2
-MISSION_STEPS = 20
+MISSION_STEPS = 10
 ROLE_TEAM_SIZE = 3
-ALPHA = 1.0
+ALPHA = 0
 DEFAULT_OUTPUT_DIR = "output/eval"
 
 
@@ -126,27 +126,25 @@ ALIEN_SPECS = [
 ]
 
 
-def find_tile_pos(grid: np.ndarray, tile: Tile) -> tuple[int, int]:
-    matches = np.argwhere(grid == int(tile))
-    if len(matches) == 0:
-        raise ValueError(f"Tile {tile.name} not found in map")
-    y, x = matches[0]
-    return int(y), int(x)
+def find_tile(grid: np.ndarray, tile: Tile) -> list[tuple[int, int]]:
+    ys, xs = np.where(grid == int(tile))
+    return [(int(y), int(x)) for y, x in zip(ys, xs)]
 
 
 def choose_human_positions(
     grid: np.ndarray,
-    anchor: tuple[int, int],
+    positions: list[tuple[int, int]],
     count: int,
     avoid: set[tuple[int, int]] | None = None,
 ) -> list[tuple[int, int]]:
     avoid_set = set(avoid or set())
     candidates: list[tuple[int, int]] = []
-    if anchor not in avoid_set:
-        candidates.append(anchor)
+    for anchor in positions:
+        if anchor not in avoid_set:
+            candidates.append(anchor)
 
     floors = [(int(y), int(x)) for y, x in np.argwhere(grid == int(Tile.FLOOR))]
-    floors = [pos for pos in floors if pos not in avoid_set and pos != anchor]
+    floors = [pos for pos in floors if pos not in avoid_set and pos not in positions]
     floors.sort(key=lambda pos: abs(pos[0] - anchor[0]) + abs(pos[1] - anchor[1]))
     candidates.extend(floors)
 
@@ -228,11 +226,11 @@ def build_simulation(
     human_spec: HumanSpec,
     alien_spec: AlienSpec,
 ) -> GenericMapSimulation:
-    human_start = find_tile_pos(grid, Tile.PLAYER_START)
-    alien_start = find_tile_pos(grid, Tile.ALIEN_START)
+    human_starts = find_tile(grid, Tile.PLAYER_START)
+    alien_start = find_tile(grid, Tile.ALIEN_START)[0]
     human_positions = choose_human_positions(
         grid,
-        human_start,
+        human_starts,
         human_spec.count,
         avoid={alien_start},
     )
