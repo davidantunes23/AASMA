@@ -140,7 +140,7 @@ Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-
 Key mechanics (active when `enable_mechanics=True`; disabled for `--demo random`):
 
 - **Radar**: topology-aware BFS distance → CRITICAL/CLOSE/NEAR/FAR every `radar_interval` steps
-- **Noise**: player emits a jittered sound position each step with `p_noise` probability; suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
+- **Noise**: player emits a jittered sound position each step with `p_noise` probability (default 0.05, configurable via `--noise-prob`); suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
 - **Cone FOV**: both agent types use `cone_fov()` — directional, wall/hide-blocked LoS via Bresenham
 
 ### Visualization (`simulation.py` render)

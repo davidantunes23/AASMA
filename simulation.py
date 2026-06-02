@@ -186,7 +186,7 @@ class GenericMapSimulation:
         default_human_view: int = 6,
         default_alien_view: int = 6,
         enable_mechanics: bool = True,
-        p_noise: float = 0.1,
+        p_noise: float = 0.05,
         noise_radius: int = 2,
         radar_interval: int = 5,
         seed: int = 0,
