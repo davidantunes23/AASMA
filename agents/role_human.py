@@ -1,3 +1,15 @@
+"""Role-aware human agent.
+
+Each agent is assigned one of three roles by the role manager:
+  WORKER  — navigates to uncompleted mission tiles and dwells on them.
+  DECOY   — repositions away from missions and emits deliberate noise to draw
+             the alien away from workers.
+  RUNNER  — stages near the exit and escapes as soon as it opens; never
+             completes missions itself.
+
+All roles share the same survival priority stack (hide when threatened) and
+converge to exit-seeking once all missions are done.
+"""
 from collections import deque
 
 import numpy as np
@@ -7,18 +19,23 @@ from agents.coord_bus import CoordType, CoordMessage
 from map_generator import Tile
 
 class RoleHumanAgent(BaseHumanAgent):
-    """Role-aware human agent. Behaves like `HumanAgent` but exposes
-    `team_role` and respects masking operators (e.g., WORKER disables hiding).
+    """Role-aware human agent built on top of BFS navigation and partial map knowledge.
+
+    The simulation calls ``observe()`` then ``step()`` each turn.
+    Role assignment is done externally by the role manager via ``agent.team_role``.
     """
 
-    _next_agent_id = 0
+    _next_agent_id = 0  # class-level counter so each instance gets a unique ID
 
-    UNKNOWN      = -1
-    ALIEN        = -2
-    RADAR_PING   = -3
-    NOISE_RIPPLE = -4
-    LOUD_NOISE_DURATION_STEPS = 10
-    LOUD_NOISE_COOLDOWN_STEPS = 20
+    # Special sentinel values embedded in the observation array by the simulation.
+    UNKNOWN      = -1   # cell not yet seen by this agent's cone FOV
+    ALIEN        = -2   # alien position marker (injected when alien is visible)
+    RADAR_PING   = -3   # radar proximity alert tile
+    NOISE_RIPPLE = -4   # sound ripple marker (ignored for map building)
+
+    # Decoy noise burst parameters.
+    LOUD_NOISE_DURATION_STEPS = 10   # how many steps a loud-noise burst lasts
+    LOUD_NOISE_COOLDOWN_STEPS = 20   # minimum quiet steps between bursts
 
     def __init__(
         self,
@@ -32,42 +49,42 @@ class RoleHumanAgent(BaseHumanAgent):
         self.pos          = start_pos
         self.direction    = start_dir
         self.view_length  = view_length
-        self.hidden: bool = False
-        self.exit_open: bool = False
-        self.team_role: TeamRole | None = TeamRole.RUNNER
-        self.last_radar_threat: str | None = None
-        self.last_radar_dist:   int | None = None
-        self._known_map:  np.ndarray | None       = None
-        self._known_exit: tuple[int, int] | None  = None
-        self._observed_aliens: set[tuple[int, int]] = set()
-        self.made_loud_noise: bool = False
-        self.loud_noise_pos: tuple[int, int] | None = None
-        self._loud_noise_steps_left: int = 0
+        self.hidden: bool = False             # True when standing on a HIDE tile
+        self.exit_open: bool = False          # set by simulation once all missions complete
+        self.team_role: TeamRole | None = TeamRole.RUNNER  # default until role manager assigns
+        self.last_radar_threat: str | None = None  # most recent radar band (CRITICAL/CLOSE/NEAR/FAR)
+        self.last_radar_dist:   int | None = None  # topology distance to alien at last radar tick
+        self._known_map:  np.ndarray | None       = None   # tile map built from cone observations
+        self._known_exit: tuple[int, int] | None  = None   # exit position once seen or received
+        self._observed_aliens: set[tuple[int, int]] = set()  # alien positions seen this step
+        self.made_loud_noise: bool = False         # True this step if decoy is emitting a signal
+        self.loud_noise_pos: tuple[int, int] | None = None  # position of the ongoing noise burst
+        self._loud_noise_steps_left: int = 0       # remaining steps in current burst
         self._loud_noise_cooldown: int = (
             self.LOUD_NOISE_COOLDOWN_STEPS if self.team_role == TeamRole.DECOY else 0
         )
 
-        # Mission counters (updated by simulation)
-        self.missions_total: int = 0
-        self.missions_remaining: int = 0
+        # Mission counters kept in sync by the simulation via attribute writes.
+        self.missions_total: int = 0       # total missions placed on the map this episode
+        self.missions_remaining: int = 0   # missions not yet completed
 
-        # Known mission positions, updated from sensing and teammate messages.
+        # Known mission positions, updated from cone observations and teammate messages.
         self.mission_positions: list[tuple[int, int]] = []
 
-        # Missions that are currently being worked by a teammate.
+        # Missions currently being worked by a teammate (avoids double-assignment).
         self.active_mission_positions: set[tuple[int, int]] = set()
 
-        # Mission currently assigned to this worker, if any.
+        # Mission tile this worker is currently heading toward.
         self.current_mission: tuple[int, int] | None = None
 
-        # Fast lookup for duplicate mission discovery.
+        # Fast lookup to avoid broadcasting the same mission tile twice.
         self._known_mission_coords: set[tuple[int, int]] = set()
 
-        # Persistent mission discovery memory for this episode.
-        # Unlike _known_mission_coords, this is NOT cleared on MISSION_DONE.
+        # Persistent mission discovery memory — not cleared when a mission completes,
+        # so the runner can tell whether all missions have been found yet.
         self._seen_mission_coords: set[tuple[int, int]] = set()
 
-        # Messages discovered during observe() are queued here.
+        # Outbound coord messages queued during observe(), sent via flush_outbox().
         self._outbox: list[CoordMessage] = []
 
     # ── Public interface ──────────────────────────────────────────────────────
@@ -92,16 +109,16 @@ class RoleHumanAgent(BaseHumanAgent):
     ) -> tuple[int, int]:
         """Return new (y, x) position. observe() must be called first each step."""
         if self.exit_open and self._tile_at(self.pos) == int(Tile.EXIT):
-            return self.pos
+            return self.pos  # already on open exit — stay and let simulation register escape
 
-        # PRIORITY 1: Stay hidden while threat is high
+        # PRIORITY 1: Stay hidden while threat is high.
         if self.hidden:
             if not self._should_keep_hiding():
                 self.hidden = False
             else:
                 return self.pos
 
-        # PRIORITY 2: Hide when threatened (shared survival logic)
+        # PRIORITY 2: Hide when threatened (shared survival logic, overrides all roles).
         if self._should_hide_now():
             spot = self._get_closest_hiding_spot()
             if spot is not None:
@@ -114,7 +131,7 @@ class RoleHumanAgent(BaseHumanAgent):
                     self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
                     return self.pos
 
-        # PRIORITY 3: If all missions are done, prioritize exit/search
+        # PRIORITY 3: If all missions are done, prioritize exit/search regardless of role.
         if self.missions_remaining == 0:
             if self._known_exit is not None:
                 nxt = self._step_toward_target(self._known_exit)
@@ -128,7 +145,8 @@ class RoleHumanAgent(BaseHumanAgent):
                 self.pos = nxt
             self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
             return self.pos
-        
+
+        # PRIORITY 4: Delegate to role-specific behaviour.
         if self.team_role == TeamRole.DECOY:
             return self._decoy_step()
         if self.team_role == TeamRole.RUNNER:
@@ -136,7 +154,7 @@ class RoleHumanAgent(BaseHumanAgent):
         if self.team_role == TeamRole.WORKER:
             return self._worker_step()
 
-        # PRIORITY 4: Run to exit once known
+        # Fallback (no role assigned): run to exit if open, otherwise explore.
         if self.exit_open and self._known_exit is not None:
             nxt = self._step_toward_target(self._known_exit)
             if nxt is not None and nxt != self.pos:
@@ -144,7 +162,6 @@ class RoleHumanAgent(BaseHumanAgent):
                 self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
                 return self.pos
 
-        # PRIORITY 4: Explore
         nxt = self._adjacent_unknown_step()
         if nxt is None:
             nxt = self._next_step_to_nearest_floor_frontier()
@@ -172,7 +189,6 @@ class RoleHumanAgent(BaseHumanAgent):
         self.hidden               = False
         self.last_radar_threat    = None
         self.last_radar_dist      = None
-        # Clear shared-state caches between episodes.
         self._outbox.clear()
         self.mission_positions        = []
         self._known_mission_coords    = set()
@@ -185,14 +201,14 @@ class RoleHumanAgent(BaseHumanAgent):
 
     # ── Coord message bus ─────────────────────────────────────────────────────
 
-    # Return and clear messages discovered in the latest observation.
     def flush_outbox(self) -> list[CoordMessage]:
+        """Return and clear messages queued during the latest observe() call."""
         msgs = self._outbox.copy()
         self._outbox.clear()
         return msgs
 
-    # Merge coordinates received from teammates.
     def receive_coords(self, messages: list[CoordMessage]) -> None:
+        """Merge coordinates received from teammates via the simulation relay."""
         for msg in messages:
             if msg.coord_type == CoordType.MISSION:
                 if msg.pos not in self._known_mission_coords:
@@ -215,8 +231,8 @@ class RoleHumanAgent(BaseHumanAgent):
                     if self._known_map is not None and self._in_bounds(*msg.pos):
                         self._known_map[msg.pos] = int(Tile.EXIT)
 
-    # Remove a mission that has already been completed.
     def remove_mission(self, pos: tuple[int, int]) -> None:
+        """Drop a completed mission from all tracking structures."""
         self._known_mission_coords.discard(pos)
         self.active_mission_positions.discard(pos)
         if self.current_mission == pos:
@@ -227,6 +243,7 @@ class RoleHumanAgent(BaseHumanAgent):
     # ── Observation integration ───────────────────────────────────────────────
 
     def _init_memory(self, obs: np.ndarray) -> None:
+        """Allocate the known map on the first observation of a new episode."""
         if self._known_map is not None and self._known_map.shape == obs.shape:
             return
         self._known_map       = np.full(obs.shape, self.UNKNOWN, dtype=np.int16)
@@ -234,7 +251,9 @@ class RoleHumanAgent(BaseHumanAgent):
         self._observed_aliens = set()
 
     def _integrate_observation(self, obs: np.ndarray) -> None:
+        """Copy visible tile IDs into the known map and broadcast new discoveries."""
         radar_active = np.any(obs == self.RADAR_PING)
+        # Only copy real tile IDs — exclude the special sentinel markers.
         visible_mask = (
             (obs != self.UNKNOWN)
             & (obs != self.ALIEN)
@@ -244,12 +263,14 @@ class RoleHumanAgent(BaseHumanAgent):
         self._known_map[visible_mask] = obs[visible_mask]
         self.hidden = self._tile_at(self.pos) == int(Tile.HIDE)
 
+        # A radar ping means the alien is within topology distance — treat
+        # the agent's own cell as a rough alien sighting for avoidance.
         if radar_active:
             self._observed_aliens = {self.pos}
         else:
             self._observed_aliens = set()
 
-        # Broadcast the exit the first time it becomes known.
+        # Broadcast the exit the first time it enters the FOV.
         ey, ex = np.where(self._known_map == int(Tile.EXIT))
         if len(ey) > 0:
             found_exit = (int(ey[0]), int(ex[0]))
@@ -261,7 +282,7 @@ class RoleHumanAgent(BaseHumanAgent):
                 ))
             self._known_exit = found_exit
 
-        # Only broadcast missions newly seen in this observation.
+        # Broadcast each mission tile the first time it is observed.
         my, mx = np.where(obs == int(Tile.MISSION))
         for y, x in zip(my.tolist(), mx.tolist()):
             pos = (int(y), int(x))
@@ -278,15 +299,20 @@ class RoleHumanAgent(BaseHumanAgent):
     # ── Navigation ────────────────────────────────────────────────────────────
 
     def _step_toward_target(self, target: tuple[int, int]) -> tuple[int, int] | None:
+        """BFS next step toward a specific cell."""
         nxt = self._bfs_next_step(lambda pos: pos == target)
         if nxt is not None and nxt != self.pos:
             self.direction = self._direction_from_step(self.pos, nxt)
         return nxt
 
     def _next_step_to_nearest_floor_frontier(self) -> tuple[int, int] | None:
+        """BFS next step toward the nearest FLOOR cell adjacent to unknown space."""
         return self._bfs_next_step(self._is_floor_frontier)
 
     def _adjacent_unknown_step(self) -> tuple[int, int] | None:
+        """Prefer stepping directly into an unknown cell if one is reachable.
+        Tie-breaks by turn cost so the agent doesn't zig-zag unnecessarily.
+        """
         y, x = self.pos
         candidates: list[tuple[tuple[int, int], Direction]] = []
         for direction in (Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST):
@@ -306,9 +332,13 @@ class RoleHumanAgent(BaseHumanAgent):
         return candidates[0][0]
 
     def _next_step_to_nearest_frontier(self) -> tuple[int, int] | None:
+        """BFS next step toward the nearest traversable frontier (any tile type)."""
         return self._bfs_next_step(self._is_frontier)
 
     def _bfs_next_step(self, is_target) -> tuple[int, int] | None:
+        """Generic BFS that returns the first step on the shortest path to any
+        cell satisfying ``is_target``. Returns None if no reachable target exists.
+        """
         start = self.pos
         if not self._in_bounds(*start):
             return None
@@ -330,6 +360,7 @@ class RoleHumanAgent(BaseHumanAgent):
         target: tuple[int, int],
         parents: dict[tuple[int, int], tuple[int, int] | None],
     ) -> tuple[int, int] | None:
+        """Walk the BFS parent map back to find the first step from self.pos."""
         current = target
         while parents[current] is not None and parents[current] != self.pos:
             current = parents[current]
@@ -338,6 +369,9 @@ class RoleHumanAgent(BaseHumanAgent):
         return current
 
     def _best_local_move(self) -> tuple[int, int] | None:
+        """Fallback: pick the walkable neighbour with the most unknown neighbours,
+        preferring frontier cells and minimising turn cost to avoid oscillation.
+        """
         neighbors = self._walkable_neighbors(self.pos)
         if not neighbors:
             return None
@@ -350,6 +384,7 @@ class RoleHumanAgent(BaseHumanAgent):
         return candidates[0][0]
 
     def _walkable_neighbors(self, position: tuple[int, int]) -> list[tuple[tuple[int, int], Direction]]:
+        """Return all known-traversable neighbours of ``position``, excluding alien cells."""
         y, x = position
         neighbors: list[tuple[tuple[int, int], Direction]] = []
         for direction in (Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST):
@@ -366,13 +401,13 @@ class RoleHumanAgent(BaseHumanAgent):
         return neighbors
 
     def _get_closest_hiding_spot(self) -> tuple[int, int] | None:
+        """BFS to the nearest HIDE tile reachable through the known map."""
         hiding_spots = self._get_known_hiding_spots()
         if not hiding_spots:
             return None
         start = self.pos
         if not self._in_bounds(*start):
             return None
-        # Use a set so the BFS can test targets quickly.
         hiding_set = set(hiding_spots)
         frontier = deque([start])
         parents: dict[tuple[int, int], tuple[int, int] | None] = {start: None}
@@ -390,9 +425,15 @@ class RoleHumanAgent(BaseHumanAgent):
     # ── Decision helpers ──────────────────────────────────────────────────────
 
     def _should_keep_hiding(self) -> bool:
+        """Stay hidden until the radar threat drops below CLOSE."""
         return self.last_radar_threat in {"CRITICAL", "CLOSE"}
 
     def _should_hide_now(self) -> bool:
+        """Decide whether to seek a hiding spot this step.
+
+        Exception: if the exit is known and very close (≤15 cells away) a CLOSE
+        threat is worth ignoring — the agent can reach the exit before the alien.
+        """
         if self.last_radar_threat is None:
             return False
         if self.last_radar_threat == "CRITICAL":
@@ -443,6 +484,7 @@ class RoleHumanAgent(BaseHumanAgent):
         return count
 
     def _is_traversable_known(self, position: tuple[int, int]) -> bool:
+        """A cell is traversable if it is known and not a wall, alien, or locked exit."""
         tile = self._tile_at(position)
         if tile == int(Tile.EXIT) and not self.exit_open:
             return False
@@ -451,6 +493,7 @@ class RoleHumanAgent(BaseHumanAgent):
     # ── WORKER helpers ────────────────────────────────────────────────────────
 
     def _worker_step(self) -> tuple[int, int]:
+        """Navigate to the nearest unclaimed mission tile and dwell on it."""
         target = self._nearest_mission()
         if target is not None and self.pos != target:
             nxt = self._step_toward_target(target)
@@ -460,10 +503,9 @@ class RoleHumanAgent(BaseHumanAgent):
                 self.hidden    = False
                 return self.pos
         if target == self.pos:
-            return self.pos
+            return self.pos  # dwelling on the mission tile — simulation tracks progress
 
-        # No mission currently assigned (or all known missions are already
-        # claimed by teammates): explore for other important tiles.
+        # No reachable mission: explore to potentially discover new ones.
         nxt = (
             self._adjacent_unknown_step()
             or self._next_step_to_nearest_frontier()
@@ -476,9 +518,10 @@ class RoleHumanAgent(BaseHumanAgent):
         return self.pos
 
     def _nearest_mission(self) -> tuple[int, int] | None:
+        """Return this worker's assigned mission, or the nearest uncontested one."""
         if self.current_mission is not None:
             return self.current_mission
-
+        # Exclude missions already being serviced by a teammate.
         available = [m for m in self.mission_positions if m not in self.active_mission_positions]
         if not available:
             return None
@@ -490,10 +533,12 @@ class RoleHumanAgent(BaseHumanAgent):
     # ── DECOY helpers ─────────────────────────────────────────────────────────
 
     def _update_decoy_loud_noise(self, can_start_noise: bool) -> bool:
+        """Advance the loud-noise state machine. Returns True if a new burst started."""
         started_now = False
         if self._loud_noise_cooldown > 0:
             self._loud_noise_cooldown -= 1
 
+        # Cannot start noise from inside a hide tile — that would reveal the hiding spot.
         if self._tile_at(self.pos) == int(Tile.HIDE):
             can_start_noise = False
 
@@ -514,8 +559,7 @@ class RoleHumanAgent(BaseHumanAgent):
 
     def _decoy_step(self) -> tuple[int, int]:
         # CRITICAL: alien is adjacent — pure survival, no noise.
-        # Justification: noise here just confirms a position the alien
-        # already knows. Only action is to flee to the nearest hide spot.
+        # Noise here only confirms a position the alien already knows; flee instead.
         if self.last_radar_threat == "CRITICAL":
             self._update_decoy_loud_noise(False)
             if self.hidden:
@@ -530,14 +574,11 @@ class RoleHumanAgent(BaseHumanAgent):
                     return self.pos
             return self.pos
 
-        # CLOSE: alien is nearby — hide silently, never make noise.
-        # Justification: too dangerous to bait; reaching cover is the only
-        # priority. No noise even if already hidden — hidden means silent.
+        # CLOSE: too dangerous to bait — reach cover silently.
         if self.last_radar_threat == "CLOSE":
             self._update_decoy_loud_noise(False)
             if self.hidden:
-                # Already in cover — stay put and wait it out.
-                return self.pos
+                return self.pos  # already in cover — wait it out
             spot = self._get_closest_hiding_spot()
             if spot is not None:
                 nxt = self._step_toward_target(spot)
@@ -548,15 +589,12 @@ class RoleHumanAgent(BaseHumanAgent):
                     return self.pos
             return self.pos
 
-        # NEAR: alien is approaching but Decoy is still safe — optimal bait window.
-        # Justification: alien is close enough to hear the noise and be drawn
-        # toward the Decoy's area (away from missions), but far enough that the
-        # Decoy can reposition before it arrives.
+        # NEAR: optimal bait window — alien is close enough to hear and be drawn
+        # away from missions but far enough that the decoy can reposition first.
         if self.last_radar_threat == "NEAR":
             if self._update_decoy_loud_noise(not self.hidden):
                 return self.pos
-            # Reposition to farthest-from-missions tile regardless of noise,
-            # so the alien arrives at an empty spot (decoy-and-dodge pattern).
+            # Move to farthest-from-missions tile so the alien arrives at empty space.
             far_tile = self._farthest_from_missions()
             if far_tile is not None:
                 nxt = self._step_toward_target(far_tile)
@@ -566,8 +604,7 @@ class RoleHumanAgent(BaseHumanAgent):
             self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
             return self.pos
 
-        # FAR or no threat — reposition to attraction zone and optionally
-        # emit a deliberate noise to preemptively draw aliens away.
+        # FAR or no threat — preemptively reposition and optionally emit noise.
         if self._update_decoy_loud_noise(self.last_radar_threat == "FAR" and not self.hidden):
             return self.pos
         far_tile = self._farthest_from_missions()
@@ -579,8 +616,7 @@ class RoleHumanAgent(BaseHumanAgent):
             self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
             return self.pos
 
-        # Fallback: explore outward to expand known map and find better
-        # farthest-from-missions candidates in unexplored regions.
+        # Fallback: explore to discover better far-from-missions candidates.
         nxt = self._adjacent_unknown_step()
         if nxt is None:
             nxt = self._next_step_to_nearest_floor_frontier()
@@ -600,6 +636,9 @@ class RoleHumanAgent(BaseHumanAgent):
         return self.pos
 
     def _farthest_from_missions(self) -> tuple[int, int] | None:
+        """Find the known traversable cell with the greatest min-distance to any mission.
+        HIDE tiles are excluded — the decoy should be visible to attract the alien.
+        """
         if not self.mission_positions or self._known_map is None:
             return None
         H, W = self._known_map.shape
@@ -623,23 +662,24 @@ class RoleHumanAgent(BaseHumanAgent):
     # ── RUNNER helpers ────────────────────────────────────────────────────────
 
     def _runner_step(self) -> tuple[int, int]:
-        # If some missions are still undiscovered, keep exploring instead of
-        # staging at the exit. Mission discovery is counted from MISSION
-        # observations/messages and is not reduced when missions complete.
+        """Stage near the exit and escape as soon as it opens; explore until then."""
+        # Determine whether there are still undiscovered missions on the map.
+        # The runner avoids staging at the exit while missions are unknown — it
+        # would just block and wait forever.
         if self.missions_total > 0:
             missing_missions = (
                 not self.exit_open
                 and len(self._seen_mission_coords) < self.missions_total
             )
         else:
-            # Fallback when total mission count is unavailable.
+            # Fallback when total mission count is unavailable from the simulation.
             missing_missions = (
                 not self.exit_open
                 and self.missions_remaining > 0
                 and self.missions_remaining > len(self._known_mission_coords)
             )
 
-        # PRIORITY 1: Exit open and known → escape if safe
+        # PRIORITY 1: Exit open and known → escape if threat is low enough.
         if self.exit_open and self._known_exit is not None:
             if self.last_radar_threat is None or self.last_radar_threat == "FAR":
                 nxt = self._step_toward_target(self._known_exit)
@@ -649,7 +689,7 @@ class RoleHumanAgent(BaseHumanAgent):
                     self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
                     return self.pos
                 return self.pos  # already at exit or blocked
-            # Threat too high: hide and wait
+            # Threat too high: hide and wait for it to pass.
             if self.hidden:
                 if self._should_keep_hiding():
                     return self.pos
@@ -665,8 +705,8 @@ class RoleHumanAgent(BaseHumanAgent):
                     return self.pos
             return self.pos
 
-        # PRIORITY 2: Exit known but locked → stage near it only when
-        # all remaining missions are already known.
+        # PRIORITY 2: Exit known but locked and all missions accounted for →
+        # stage in the cell adjacent to the exit ready to sprint through.
         if self._known_exit is not None and not missing_missions:
             if self.last_radar_threat in {"CRITICAL", "CLOSE"}:
                 spot = self._get_closest_hiding_spot()
@@ -680,7 +720,7 @@ class RoleHumanAgent(BaseHumanAgent):
                 return self.pos
             nxt = self._step_toward_exit_area()
             if nxt is None or nxt == self.pos:
-                # Can't reach exit area through known map — explore to fill gaps.
+                # Path to exit area unknown — explore to fill the gap.
                 nxt = (
                     self._adjacent_unknown_step()
                     or self._next_step_to_nearest_floor_frontier()
@@ -693,7 +733,7 @@ class RoleHumanAgent(BaseHumanAgent):
             self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
             return self.pos
 
-        # Explore floor frontiers first, then broader frontiers.
+        # Default: explore until exit and all missions are known.
         nxt = self._adjacent_unknown_step()
         if nxt is None:
             nxt = self._next_step_to_nearest_floor_frontier()
@@ -767,6 +807,7 @@ class RoleHumanAgent(BaseHumanAgent):
         return (0, -1)
 
     def _turn_cost(self, current: Direction, candidate: Direction) -> int:
+        """Penalise turns: 0 = straight, 1 = left/right, 2 = U-turn."""
         order = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
         delta = (order.index(candidate) - order.index(current)) % 4
         if delta == 0:

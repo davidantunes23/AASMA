@@ -17,7 +17,7 @@ import numpy as np
 
 
 class Direction(Enum):
-    NORTH = 1
+    NORTH = 1 
     EAST  = 2
     SOUTH = 3
     WEST  = 4

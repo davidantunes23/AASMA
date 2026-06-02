@@ -1,3 +1,15 @@
+"""Rule-based human agent (single-agent, no team coordination).
+
+Uses BFS navigation over a partial map built from cone observations.
+Priority stack each step:
+  1. Stay hidden while threat ≥ CLOSE
+  2. Seek hiding spot when threatened and exit is far
+  3. Navigate to nearest known mission, then to exit once open
+  4. Explore unknown frontiers
+
+This agent does not coordinate with teammates. Use RoleHumanAgent for
+multi-agent scenarios with explicit role assignment.
+"""
 from collections import deque
 
 import numpy as np
@@ -5,7 +17,7 @@ from enum import Enum
 
 from agents.base import BaseHumanAgent, Direction
 
-
+# Action enum kept for interface compatibility with the RL training pipeline.
 class Action(Enum):
     WAIT = 0
     WALK = 1
@@ -14,32 +26,33 @@ from map_generator import Tile
 
 
 class HumanAgent(BaseHumanAgent):
-    """Rule-based human agent. Uses BFS navigation, radar-reactive hiding.
+    """Rule-based human agent. Uses BFS navigation and radar-reactive hiding.
 
     All positions are (y, x) / (row, col). The simulation calls observe()
     once per step before step() so the agent can update its internal map.
     """
 
-    UNKNOWN = -1
-    ALIEN = -2
-    RADAR_PING = -3
-    NOISE_RIPPLE = -4
+    # Special sentinel values embedded in the observation array by the simulation.
+    UNKNOWN      = -1   # cell not yet seen by this agent's cone FOV
+    ALIEN        = -2   # alien position marker (injected when alien is visible)
+    RADAR_PING   = -3   # radar proximity alert tile
+    NOISE_RIPPLE = -4   # sound ripple marker (ignored for map building)
 
     def __init__(self, start_pos: tuple[int, int], start_dir: Direction = Direction.NORTH, view_length: int = 6):
         self.pos = start_pos
         self.direction = start_dir
         self.view_length = view_length
-        self.hidden: bool = False
-        self.exit_open: bool = False
-        self.last_radar_threat: str | None = None
-        self.last_radar_dist: int | None = None
-        self._known_map: np.ndarray | None = None
-        self._known_exit: tuple[int, int] | None = None
-        self._known_missions: set[tuple[int, int]] = set()
-        self._completed_missions: set[tuple[int, int]] = set()
-        self._current_objective: tuple[int, int] | None = None
-        self.mission_manager = None
-        self._observed_aliens: set[tuple[int, int]] = set()
+        self.hidden: bool = False             # True when standing on a HIDE tile
+        self.exit_open: bool = False          # set by simulation once all missions complete
+        self.last_radar_threat: str | None = None  # most recent radar band (CRITICAL/CLOSE/NEAR/FAR)
+        self.last_radar_dist: int | None = None    # topology distance to alien at last radar tick
+        self._known_map: np.ndarray | None = None  # tile map built from cone observations
+        self._known_exit: tuple[int, int] | None = None    # exit position once seen
+        self._known_missions: set[tuple[int, int]] = set() # mission tiles seen and not yet completed
+        self._completed_missions: set[tuple[int, int]] = set()  # missions already finished
+        self._current_objective: tuple[int, int] | None = None  # current BFS navigation target
+        self.mission_manager = None           # reserved for external mission management hooks
+        self._observed_aliens: set[tuple[int, int]] = set()  # alien positions seen this step
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -63,16 +76,16 @@ class HumanAgent(BaseHumanAgent):
     ) -> tuple[int, int]:
         """Return new (y, x) position. observe() must be called first each step."""
         if self.exit_open and self._tile_at(self.pos) == int(Tile.EXIT):
-            return self.pos
+            return self.pos  # already on open exit — stay and let simulation register escape
 
-        # PRIORITY 1: Stay hidden while threat is high
+        # PRIORITY 1: Stay hidden while threat is high.
         if self.hidden:
             if not self._should_keep_hiding():
                 self.hidden = False
             else:
                 return self.pos
 
-        # PRIORITY 2: Hide when threatened and no nearby exit
+        # PRIORITY 2: Hide when threatened and no nearby exit.
         if self._should_hide_now():
             spot = self._get_closest_hiding_spot()
             if spot is not None:
@@ -85,14 +98,14 @@ class HumanAgent(BaseHumanAgent):
                     self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
                     return self.pos
 
-        # PRIORITY 3: Handle current objective (mission or exit)
+        # PRIORITY 3: Navigate to current objective (mission tile or exit).
         self._current_objective = self._select_objective()
         if self._current_objective is not None and self._current_objective in self._known_missions:
             if self.pos == self._current_objective:
                 completed = self._advance_current_mission()
                 self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
                 if not completed:
-                    return self.pos
+                    return self.pos  # dwell here; simulation tracks progress
                 self._current_objective = None
 
         if self._current_objective is None:
@@ -105,7 +118,7 @@ class HumanAgent(BaseHumanAgent):
                 self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
                 return self.pos
 
-        # PRIORITY 4: Explore
+        # PRIORITY 4: Explore unknown frontiers.
         nxt = self._adjacent_unknown_step()
         if nxt is None:
             nxt = self._next_step_to_nearest_floor_frontier()
@@ -138,6 +151,7 @@ class HumanAgent(BaseHumanAgent):
         self.last_radar_dist = None
 
     def remove_mission(self, position: tuple[int, int]) -> None:
+        """Called by the simulation when a mission tile is completed."""
         pos = (int(position[0]), int(position[1]))
         self._known_missions.discard(pos)
         self._completed_missions.add(pos)
@@ -147,6 +161,7 @@ class HumanAgent(BaseHumanAgent):
     # ── Observation integration ───────────────────────────────────────────────
 
     def _init_memory(self, obs: np.ndarray):
+        """Allocate the known map on the first observation of a new episode."""
         if self._known_map is not None and self._known_map.shape == obs.shape:
             return
         self._known_map = np.full(obs.shape, self.UNKNOWN, dtype=np.int16)
@@ -157,7 +172,9 @@ class HumanAgent(BaseHumanAgent):
         self._observed_aliens = set()
 
     def _integrate_observation(self, obs: np.ndarray):
+        """Copy visible tile IDs into the known map; detect exit, missions, and aliens."""
         radar_active = np.any(obs == self.RADAR_PING)
+        # Only copy real tile IDs — exclude the special sentinel markers.
         visible_mask = (
             (obs != self.UNKNOWN)
             & (obs != self.ALIEN)
@@ -166,17 +183,25 @@ class HumanAgent(BaseHumanAgent):
         )
         self._known_map[visible_mask] = obs[visible_mask]
         self.hidden = self._tile_at(self.pos) == int(Tile.HIDE)
+
+        # A radar ping means the alien is within topology distance — treat
+        # the agent's own cell as a rough alien sighting for avoidance.
         if radar_active:
             self._observed_aliens = {self.pos}
         else:
             self._observed_aliens = set()
+
         ey, ex = np.where(self._known_map == int(Tile.EXIT))
         if len(ey) > 0:
             self._known_exit = (int(ey[0]), int(ex[0]))
+
         my, mx = np.where(obs == int(Tile.MISSION))
         if len(my) > 0:
             seen = {(int(y), int(x)) for y, x in zip(my, mx)}
             self._known_missions |= seen
+
+        # Remove any mission tile that was visible this step but is no longer
+        # marked as MISSION — it was completed while the agent was watching.
         if self._known_missions:
             vy, vx = np.where(visible_mask)
             visible_positions = {(int(y), int(x)) for y, x in zip(vy, vx)}
@@ -191,15 +216,18 @@ class HumanAgent(BaseHumanAgent):
     # ── Navigation ────────────────────────────────────────────────────────────
 
     def _step_toward_target(self, target: tuple[int, int]) -> tuple[int, int] | None:
+        """BFS next step toward a specific cell."""
         nxt = self._bfs_next_step(lambda pos: pos == target)
         if nxt is not None and nxt != self.pos:
             self.direction = self._direction_from_step(self.pos, nxt)
         return nxt
 
     def _next_step_to_nearest_floor_frontier(self) -> tuple[int, int] | None:
+        """BFS next step toward the nearest FLOOR cell adjacent to unknown space."""
         return self._bfs_next_step(self._is_floor_frontier)
 
     def _select_objective(self) -> tuple[int, int] | None:
+        """Choose the current navigation target: nearest mission, then exit."""
         if self._known_missions:
             return min(
                 self._known_missions,
@@ -213,11 +241,15 @@ class HumanAgent(BaseHumanAgent):
         return bool(self.exit_open)
 
     def _advance_current_mission(self) -> bool:
+        """Dwell logic stub — mission progress is tracked by the simulation, not the agent."""
         if self._current_objective is None:
             return False
-        return False
+        return False  # always return False so the agent keeps dwelling; simulation fires completion
 
     def _adjacent_unknown_step(self) -> tuple[int, int] | None:
+        """Prefer stepping directly into an unknown cell if one is reachable.
+        Tie-breaks by turn cost to avoid zig-zagging.
+        """
         y, x = self.pos
         candidates: list[tuple[tuple[int, int], Direction]] = []
         for direction in (Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST):
@@ -237,9 +269,13 @@ class HumanAgent(BaseHumanAgent):
         return candidates[0][0]
 
     def _next_step_to_nearest_frontier(self) -> tuple[int, int] | None:
+        """BFS next step toward the nearest traversable frontier (any tile type)."""
         return self._bfs_next_step(self._is_frontier)
 
     def _bfs_next_step(self, is_target) -> tuple[int, int] | None:
+        """Generic BFS that returns the first step on the shortest path to any
+        cell satisfying ``is_target``. Returns None if no reachable target exists.
+        """
         start = self.pos
         if not self._in_bounds(*start):
             return None
@@ -261,6 +297,7 @@ class HumanAgent(BaseHumanAgent):
         target: tuple[int, int],
         parents: dict[tuple[int, int], tuple[int, int] | None],
     ) -> tuple[int, int] | None:
+        """Walk the BFS parent map back to find the first step from self.pos."""
         current = target
         while parents[current] is not None and parents[current] != self.pos:
             current = parents[current]
@@ -269,6 +306,9 @@ class HumanAgent(BaseHumanAgent):
         return current
 
     def _best_local_move(self) -> tuple[int, int] | None:
+        """Fallback: pick the walkable neighbour with the most unknown neighbours,
+        preferring frontier cells and minimising turn cost.
+        """
         neighbors = self._walkable_neighbors(self.pos)
         if not neighbors:
             return None
@@ -281,6 +321,7 @@ class HumanAgent(BaseHumanAgent):
         return candidates[0][0]
 
     def _walkable_neighbors(self, position: tuple[int, int]) -> list[tuple[tuple[int, int], Direction]]:
+        """Return all known-traversable neighbours of ``position``, excluding alien cells."""
         y, x = position
         neighbors: list[tuple[tuple[int, int], Direction]] = []
         for direction in (Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST):
@@ -297,6 +338,7 @@ class HumanAgent(BaseHumanAgent):
         return neighbors
 
     def _get_closest_hiding_spot(self) -> tuple[int, int] | None:
+        """BFS to the nearest HIDE tile reachable through the known map."""
         hiding_spots = self._get_known_hiding_spots()
         if not hiding_spots:
             return None
@@ -319,9 +361,15 @@ class HumanAgent(BaseHumanAgent):
     # ── Decision helpers ──────────────────────────────────────────────────────
 
     def _should_keep_hiding(self) -> bool:
+        """Stay hidden until the radar threat drops below CLOSE."""
         return self.last_radar_threat in {"CRITICAL", "CLOSE"}
 
     def _should_hide_now(self) -> bool:
+        """Decide whether to seek a hiding spot this step.
+
+        Exception: if the exit is known and very close (≤15 cells away) a CLOSE
+        threat is worth ignoring — the agent can reach the exit before the alien.
+        """
         if self.last_radar_threat is None:
             return False
         if self.last_radar_threat == "CRITICAL":
@@ -372,6 +420,7 @@ class HumanAgent(BaseHumanAgent):
         return count
 
     def _is_traversable_known(self, position: tuple[int, int]) -> bool:
+        """A cell is traversable if it is known and not a wall, alien, or locked exit."""
         tile = self._tile_at(position)
         if tile == int(Tile.EXIT) and not self.exit_open:
             return False
@@ -415,6 +464,7 @@ class HumanAgent(BaseHumanAgent):
         return (0, -1)
 
     def _turn_cost(self, current: Direction, candidate: Direction) -> int:
+        """Penalise turns: 0 = straight, 1 = left/right, 2 = U-turn."""
         order = [Direction.NORTH, Direction.EAST, Direction.SOUTH, Direction.WEST]
         delta = (order.index(candidate) - order.index(current)) % 4
         if delta == 0:
