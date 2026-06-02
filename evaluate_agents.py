@@ -223,6 +223,7 @@ def build_simulation(
     seed: int,
     human_spec: HumanSpec,
     alien_spec: AlienSpec,
+    p_noise: float = 0.10,
 ) -> GenericMapSimulation:
     human_starts = find_tile(grid, Tile.PLAYER_START)
     alien_start = find_tile(grid, Tile.ALIEN_START)[0]
@@ -249,6 +250,7 @@ def build_simulation(
         default_alien_view=view_length,
         enable_mechanics=True,
         noise_radius=2,
+        p_noise=p_noise,
         seed=seed,
         mission_steps=MISSION_STEPS,
     )
@@ -271,8 +273,9 @@ def run_episode(
     seed: int,
     human_spec: HumanSpec,
     alien_spec: AlienSpec,
+    p_noise: float = 0.10,
 ) -> EpisodeRun:
-    simulation = build_simulation(grid, view_length, seed, human_spec, alien_spec)
+    simulation = build_simulation(grid, view_length, seed, human_spec, alien_spec, p_noise=p_noise)
     frames, outcome = simulation.run(max_steps=max_steps)
 
     outcome_frame = next((frame for frame in frames if frame.outcome is not None), frames[-1])
@@ -447,6 +450,7 @@ def evaluate_matchup(
     idle_limit: int,
     human_spec: HumanSpec,
     alien_spec: AlienSpec,
+    p_noise: float = 0.10,
 ) -> MatchupMetrics:
     escaped_counts = [0, 0, 0, 0]
     total_steps = 0
@@ -479,6 +483,7 @@ def evaluate_matchup(
             seed=episode_seed,
             human_spec=human_spec,
             alien_spec=alien_spec,
+            p_noise=p_noise,
         )
         metrics = extract_episode_metrics(
             seed=episode_seed,
@@ -1028,6 +1033,8 @@ def parse_args() -> argparse.Namespace:
         default=["all"],
         help="Which alien model(s) to evaluate (space-separated)",
     )
+    parser.add_argument("--noise-prob", type=float, default=0.10,
+                        help="Probability of emitting noise each step (default: 0.10)")
     parser.add_argument(
         "--no-show",
         action="store_true",
@@ -1089,6 +1096,7 @@ def main() -> None:
                         idle_limit=args.idle_limit,
                         human_spec=human_spec,
                         alien_spec=alien_spec,
+                        p_noise=args.noise_prob,
                     )
                     stats = matchup.escape_stats
                     episodes = matchup.episodes
