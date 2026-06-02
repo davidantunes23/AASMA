@@ -115,9 +115,9 @@ class AlienSpec:
 HUMAN_SPECS = [
     HumanSpec("random", "random_human", ROLE_TEAM_SIZE, role_based=False, omniscient=False),
     HumanSpec("rule", "rule_human", ROLE_TEAM_SIZE, role_based=False, omniscient=False),
-    HumanSpec("omniscient", "omniscient_human", ROLE_TEAM_SIZE, role_based=True, omniscient=True),
     HumanSpec("role", "role_human_3", ROLE_TEAM_SIZE, role_based=True, omniscient=False),
     HumanSpec("coop", "coop_role_human_3", ROLE_TEAM_SIZE, role_based=True, omniscient=False),
+    HumanSpec("omniscient", "omniscient_human", ROLE_TEAM_SIZE, role_based=True, omniscient=True),
 ]
 
 ALIEN_SPECS = [
