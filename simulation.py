@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, Iterable, Literal, Optional, Sequence
 from uuid import uuid4
 
@@ -14,16 +14,16 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.colors import ListedColormap
 from matplotlib.markers import MarkerStyle
 
-from agents.base import Direction, cone_fov, TeamRole
-from agents.rule_alien import AlienState
+from agents.base import Direction, TeamRole, cone_fov
 from agents.coord_bus import CoordMessage, CoordType
 from agents.role_manager import (
-    assign_worker_greedy,
-    assign_workers_omniscient,
     assign_decoy_farthest,
     assign_runner_residual,
+    assign_worker_greedy,
+    assign_workers_omniscient,
     clear_roles,
 )
+from agents.rule_alien import AlienState
 from map_generator import Tile
 
 KnowledgeMode = Literal["off", "on"]
@@ -186,7 +186,7 @@ class GenericMapSimulation:
         default_human_view: int = 6,
         default_alien_view: int = 6,
         enable_mechanics: bool = True,
-        p_noise: float = 0.05,
+        p_noise: float = 0.1,
         noise_radius: int = 2,
         radar_interval: int = 5,
         seed: int = 0,
