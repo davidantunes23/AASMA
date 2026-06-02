@@ -70,7 +70,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--human-view", type=int, default=6, help="Human observation radius (default: 6)")
     parser.add_argument("--alien-fov", type=int, default=6, help="Alien FOV radius (default: 6)")
     parser.add_argument("--noise-radius", type=int, default=2, help="Max cell offset for player noise (default: 2)")
-    parser.add_argument("--noise-prob", type=float, default=0.1, help="Probability of emitting noise each step (default: 0.1)")
+    parser.add_argument("--noise-prob", type=float, default=0.05, help="Probability of emitting noise each step (default: 0.05)")
     parser.add_argument("--mission-steps", type=int, default=10,
                         help="Steps required to complete each mission tile (default: 10)")
     parser.add_argument("--mission-count", type=int, default=2,
@@ -114,20 +114,20 @@ def build_agents(
             from agents.random_human import RandomHumanAgent
             return RandomHumanAgent(grid=grid.copy(), pos=human_start, rng=random.Random(seed + ix))
         if human_class == "role":
-            from agents.base import Direction
             from agents.role_human import RoleHumanAgent
+            from agents.base import Direction
             return RoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
         if human_class == "coop":
-            from agents.base import Direction
             from agents.coop_role_human import CoopRoleHumanAgent
+            from agents.base import Direction
             return CoopRoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
         if human_class == "omniscient":
-            from agents.base import Direction
             from agents.omniscient_human import OmniscientHumanAgent
+            from agents.base import Direction
             return OmniscientHumanAgent(grid=grid.copy(), start_pos=human_start, start_dir=Direction.NORTH)
         # default: rule-based HumanAgent
-        from agents.base import Direction
         from agents.rule_human import HumanAgent
+        from agents.base import Direction
         return HumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
 
     # Helper to create alien instances depending on chosen class
