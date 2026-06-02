@@ -125,7 +125,7 @@ All roles share the survival priority: hiding overrides role-specific tasks when
 
 ### Mission system (`simulation.py`)
 
-Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-count`, default 2). A human must stand on a mission tile for `--mission-steps` consecutive steps (minimum 20) to complete it. The exit is **locked** until all missions are completed. The simulation tracks dwell progress in `_mission_dwell_progress` and notifies role-aware agents via coord messages when a mission completes.
+Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-count`, default 2). A human must accumulate `--mission-steps` steps on a mission tile to complete it (default 10); steps do not need to be consecutive — progress persists if the agent leaves and returns. The exit is **locked** until all missions are completed. The simulation tracks dwell progress in `_mission_dwell_progress` and notifies role-aware agents via coord messages when a mission completes.
 
 ### Simulation loop (`simulation.py`)
 
