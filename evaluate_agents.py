@@ -45,7 +45,7 @@ except ModuleNotFoundError:
 MISSION_COUNT = 2
 MISSION_STEPS = 10
 ROLE_TEAM_SIZE = 3
-ALPHA = 1.0
+ALPHA = 0.0
 DEFAULT_OUTPUT_DIR = "output/eval"
 
 
