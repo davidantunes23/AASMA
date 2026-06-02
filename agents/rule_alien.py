@@ -87,66 +87,11 @@ def astar(grid, start, goal, passable):
     return []
 
 
-class BeliefMap:
-    """Bayesian probability map over player position. All positions (y, x)."""
-
-    def __init__(self, grid):
-        self.grid = grid
-        H, W = grid.shape
-        self.belief = np.zeros((H, W), dtype=np.float64)
-        for y in range(H):
-            for x in range(W):
-                if grid[y, x] in PASSABLE_PLAYER:
-                    self.belief[y, x] = 1.0
-        self._norm()
-
-    def _norm(self):
-        t = self.belief.sum()
-        if t > 1e-12:
-            self.belief /= t
-
-    def diffuse(self, stay=0.5):
-        H, W = self.grid.shape
-        out = np.zeros_like(self.belief)
-        move = (1 - stay) / 4
-        for y in range(H):
-            for x in range(W):
-                p = self.belief[y, x]
-                if p == 0:
-                    continue
-                out[y, x] += p * stay
-                for dy, dx in DIRS:
-                    ny, nx = y + dy, x + dx
-                    if 0 <= nx < W and 0 <= ny < H and self.grid[ny, nx] in PASSABLE_PLAYER:
-                        out[ny, nx] += p * move
-                    else:
-                        out[y, x] += p * move
-        self.belief = out
-        self._norm()
-
-    def observe(self, visible, player_visible, player_pos=None, player_hiding=False):
-        if player_visible and not player_hiding and player_pos:
-            self.belief[:] = 0.0
-            self.belief[player_pos[0], player_pos[1]] = 1.0  # player_pos is (y, x)
-        else:
-            for vy, vx in visible:  # visible contains (y, x) tuples
-                if self.grid[vy, vx] != HIDE:
-                    self.belief[vy, vx] = 0.0
-        self._norm()
-
-    def peak(self):
-        if self.belief.max() < 1e-12:
-            return None
-        r, c = np.unravel_index(np.argmax(self.belief), self.belief.shape)
-        return (int(r), int(c))  # (y, x)
-
-
 class KnowledgeMap:
     """Tracks observed tiles and player sightings. All positions (y, x)."""
 
-    def __init__(self, grid):
-        self.grid = grid
-        H, W = grid.shape
+    def __init__(self, shape: tuple[int, int]):
+        H, W = shape
         self.knowledge = np.full((H, W), UNKNOWN, dtype=np.int16)
         self.seen_vents: set[tuple[int, int]] = set()
 
@@ -166,7 +111,7 @@ class KnowledgeMap:
         candidates = []
         for y in range(H):
             for x in range(W):
-                if self.knowledge[y, x] not in (UNKNOWN, PLAYER_SEEN) and self.grid[y, x] in PASSABLE_ALIEN:
+                if self.knowledge[y, x] not in (UNKNOWN, PLAYER_SEEN) and self.knowledge[y, x] in PASSABLE_ALIEN:
                     for dy, dx in DIRS:
                         ny, nx = y + dy, x + dx
                         if 0 <= nx < W and 0 <= ny < H:
@@ -191,11 +136,11 @@ class KnowledgeMap:
         return self.knowledge.copy()
 
 
-def build_waypoints(grid, n=6, seed=0):
-    """Create n well-spaced patrol waypoints. Returns list of (y, x) positions."""
+def build_waypoints(map_array: np.ndarray, n=6, seed=0):
+    """Create n well-spaced patrol waypoints from any map/knowledge array. Returns list of (y, x) positions."""
     rng = np.random.default_rng(seed)
-    H, W = grid.shape
-    cands = [(y, x) for y in range(H) for x in range(W) if grid[y, x] in PASSABLE_ALIEN]
+    H, W = map_array.shape
+    cands = [(y, x) for y in range(H) for x in range(W) if map_array[y, x] in PASSABLE_ALIEN]
     if not cands:
         return []
     cands = np.array(cands)
@@ -212,13 +157,13 @@ def build_waypoints(grid, n=6, seed=0):
 
 @dataclass
 class AlienAgent(BaseAlienAgent):
-    """Rule-based alien with FSM, A* pathfinding, belief map, and vent routing.
+    """Rule-based alien with FSM, A* pathfinding, and vent routing.
 
     All positions use (y, x) / (row, col) convention.
     Uses directional cone FOV — can only see what is in front of it.
+    Knowledge of the map is built incrementally from cone observations, same as humans.
     """
 
-    _grid: np.ndarray
     start_pos: tuple[int, int]
     view_length: int = 6
     replan_every: int = 3
@@ -227,8 +172,7 @@ class AlienAgent(BaseAlienAgent):
     direction: Direction = field(init=False)
     hidden: bool = field(default=False, init=False)
     state: AlienState = field(init=False)
-    knowledge: KnowledgeMap = field(init=False)
-    belief: BeliefMap = field(init=False)
+    knowledge: Optional[KnowledgeMap] = field(default=None, init=False)
     last_known_pos: Optional[tuple] = field(init=False)
     player_known_hiding: bool = field(default=False, init=False)
     last_heard_pos: Optional[tuple] = field(init=False)
@@ -248,14 +192,13 @@ class AlienAgent(BaseAlienAgent):
         self.pos = start_pos or self.start_pos
         self.direction = Direction.SOUTH
         self.state = AlienState.SEARCH
-        self.knowledge = KnowledgeMap(self._grid)
-        self.belief = BeliefMap(self._grid)
+        self.knowledge = None  # initialised lazily on first observe() call
         self.last_known_pos = None
         self.player_known_hiding = False
         self.last_heard_pos = None
         self.steps_since_heard = 0
         self.path = []
-        self.waypoints = build_waypoints(self._grid)
+        self.waypoints = []  # built lazily from observed map when first needed
         self.wp_idx = 0
         self.steps_no_replan = 0
         self.steps_in_state = 0
@@ -267,11 +210,13 @@ class AlienAgent(BaseAlienAgent):
         self._player_pos = None
 
     def observe(self, obs: np.ndarray, opponent_positions=None) -> None:
-        """Ingest cone observation and update knowledge/belief maps.
+        """Ingest cone observation and update knowledge map.
 
-        obs: full-grid-shaped array with UNKNOWN_TILE=-1 outside FOV, true tile IDs inside.
+        obs: full-grid-shaped array with UNKNOWN=-1 outside FOV, true tile IDs inside.
         opponent_positions: list of (pos, hidden) tuples for alive human agents.
         """
+        if self.knowledge is None:
+            self.knowledge = KnowledgeMap(obs.shape)
         visible = {(int(y), int(x)) for y, x in zip(*np.where(obs != UNKNOWN))}
 
         self._player_seen = False
@@ -319,19 +264,6 @@ class AlienAgent(BaseAlienAgent):
         if (player_seen or player_hiding) and player_pos is not None:
             self._player_pos = player_pos
 
-        # STEP 3: UPDATE BELIEF MAP WITH AUDITORY EVIDENCE
-        H, W = self.knowledge.knowledge.shape
-        if sound_detected:
-            hy, hx = heard_pos
-            if 0 <= hy < H and 0 <= hx < W:
-                for dy in [-1, 0, 1]:
-                    for dx in [-1, 0, 1]:
-                        ny, nx = hy + dy, hx + dx
-                        if 0 <= ny < H and 0 <= nx < W:
-                            if self.belief.grid[ny, nx] in PASSABLE_PLAYER:
-                                self.belief.belief[ny, nx] += 0.1
-        self.belief._norm()
-
         # STEP 4: STATE TRANSITION
         prev = self.state
         self._transition(player_seen, player_hiding, self._player_pos)
@@ -349,6 +281,7 @@ class AlienAgent(BaseAlienAgent):
                 self._teleport_to_vent(target_vent)
 
         # STEP 5: MOVEMENT
+        H, W = self.knowledge.knowledge.shape
         steps = SPEED[self.state]
         for _ in range(steps):
             if self._rl_action_override is not None:
@@ -598,8 +531,12 @@ class AlienAgent(BaseAlienAgent):
                 prev_areas = self.knowledge.get_previously_seen_player_area()
                 if prev_areas:
                     goal = min(prev_areas, key=lambda p: heuristic(self.pos, p))
-                elif self.waypoints:
-                    goal = self.waypoints[self.wp_idx % len(self.waypoints)]
-                    self.wp_idx += 1
+                else:
+                    # All known area explored — build patrol waypoints from observed map
+                    if not self.waypoints:
+                        self.waypoints = build_waypoints(self.knowledge.knowledge)
+                    if self.waypoints:
+                        goal = self.waypoints[self.wp_idx % len(self.waypoints)]
+                        self.wp_idx += 1
 
         return astar(km, self.pos, goal, PASSABLE_ALIEN)

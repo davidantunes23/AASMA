@@ -141,9 +141,7 @@ class BaseAgent(ABC):
 
 
 class BaseAlienAgent(BaseAgent):
-    """Alien-role agents. Holds the physical map only for BeliefMap seeding and waypoint generation."""
-
-    _grid: np.ndarray  # physical map — NOT for navigation; used only by BeliefMap and build_waypoints
+    """Alien-role agents. Build map knowledge incrementally from cone observations, same as human agents."""
 
 
 class BaseHumanAgent(BaseAgent):

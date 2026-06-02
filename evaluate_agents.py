@@ -202,20 +202,18 @@ def build_humans(
 
 def build_alien(
     spec: AlienSpec,
-    grid: np.ndarray,
     start_pos: tuple[int, int],
     seed: int,
     view_length: int,
 ) -> object:
     if spec.key == "random":
         return RandomAlienAgent(
-            _grid=grid.copy(),
             pos=start_pos,
             view_length=view_length,
             rng=random.Random(seed + 100),
         )
     if spec.key == "rule":
-        return AlienAgent(_grid=grid.copy(), start_pos=start_pos, view_length=view_length)
+        return AlienAgent(start_pos=start_pos, view_length=view_length)
     raise ValueError(f"Unknown alien model key: {spec.key}")
 
 
@@ -236,7 +234,7 @@ def build_simulation(
     )
 
     human_agents = build_humans(human_spec, grid, human_positions, seed, view_length)
-    alien_agent = build_alien(alien_spec, grid, alien_start, seed, view_length)
+    alien_agent = build_alien(alien_spec, alien_start, seed, view_length)
 
     agents: list = []
     for idx, agent in enumerate(human_agents):
