@@ -172,7 +172,7 @@ class BaseAETEnv(gym.Env):
             a_pos = (1, 1)
 
         self.human_agent = HumanAgent(start_pos=h_pos, start_dir=Direction.NORTH)
-        self.alien_agent = AlienAgent(grid=self.grid, start_pos=a_pos)
+        self.alien_agent = AlienAgent(_grid=self.grid, start_pos=a_pos)
 
         self.game = Game(self.grid, self.human_agent, self.alien_agent)
         self.step_count = 0

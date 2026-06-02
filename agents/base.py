@@ -128,15 +128,22 @@ class BaseAgent(ABC):
         """Advance one simulation step. Returns the agent's new (y, x) position."""
         ...
 
+    def observe(
+        self,
+        obs: np.ndarray,
+        **kwargs,
+    ) -> None:
+        """Ingest this step's observation array. No-op by default."""
+
     def reset(self, start_pos: tuple[int, int] | None = None) -> None:
         if start_pos is not None:
             self.pos = start_pos
 
 
 class BaseAlienAgent(BaseAgent):
-    """Alien-role agents. Carries a reference to the full grid for pathfinding."""
+    """Alien-role agents. Holds the physical map only for BeliefMap seeding and waypoint generation."""
 
-    grid: np.ndarray  # full map; used for A* / BFS pathfinding and tile queries
+    _grid: np.ndarray  # physical map — NOT for navigation; used only by BeliefMap and build_waypoints
 
 
 class BaseHumanAgent(BaseAgent):
@@ -149,12 +156,3 @@ class BaseHumanAgent(BaseAgent):
     hidden: bool = False              # True when the agent is inside a HIDE tile
     exit_open: bool = False           # set by simulation once all missions are completed
     team_role: "TeamRole | None" = None  # assigned role (WORKER/RUNNER/DECOY); None if uncoordinated
-
-    def observe(
-        self,
-        _obs: np.ndarray,
-        _radar_threat: str | None = None,
-        _radar_dist: int | None = None,
-    ) -> None:
-        """Ingest this step's observation array and radar reading. No-op by default."""
-        pass

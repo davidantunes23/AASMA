@@ -20,7 +20,7 @@ class RandomAlienAgent(BaseAlienAgent):
     Used as a lower-bound baseline — no pursuit, no memory of players.
     """
 
-    grid: np.ndarray           # static map used for tile lookups and bounds checks
+    _grid: np.ndarray          # physical map — tile lookups and bounds checks only
     pos: tuple                 # current (y, x) position
     view_length: int = 6       # FOV radius used for vent discovery and read by the simulation
     rng: random.Random = field(default_factory=random.Random, repr=False)  # per-agent RNG
@@ -41,22 +41,22 @@ class RandomAlienAgent(BaseAlienAgent):
                 if abs(dx) + abs(dy) > self.view_length:
                     continue
                 ny, nx = y + dy, x + dx
-                if 0 <= ny < self.grid.shape[0] and 0 <= nx < self.grid.shape[1]:
-                    if self.grid[ny, nx] == 2:  # VENT
+                if 0 <= ny < self._grid.shape[0] and 0 <= nx < self._grid.shape[1]:
+                    if self._grid[ny, nx] == 2:  # VENT
                         self.seen_vents.add((ny, nx))
 
         # Collect walkable neighbours
-        H, W = self.grid.shape
+        H, W = self._grid.shape
         neighbours = []
         for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
             ny, nx = y + dy, x + dx
-            if 0 <= ny < H and 0 <= nx < W and self.grid[ny, nx] in PASSABLE_ALIEN:
+            if 0 <= ny < H and 0 <= nx < W and self._grid[ny, nx] in PASSABLE_ALIEN:
                 neighbours.append((ny, nx))
 
         # Vent teleport is only available when standing on a vent with others known
         actions = ["walk", "wait"]
         other_vents = []
-        if self.grid[y, x] == 2 and len(self.seen_vents) > 1:
+        if self._grid[y, x] == 2 and len(self.seen_vents) > 1:
             other_vents = [v for v in self.seen_vents if v != (y, x)]
             if other_vents:
                 actions.append("vent")

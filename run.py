@@ -135,9 +135,9 @@ def build_agents(
     def make_alien_instance(ix: int):
         if alien_class == "random" or demo == "random":
             from agents.random_alien import RandomAlienAgent
-            return RandomAlienAgent(grid=grid.copy(), pos=alien_start, rng=random.Random(seed + 100 + ix))
+            return RandomAlienAgent(_grid=grid.copy(), pos=alien_start, rng=random.Random(seed + 100 + ix))
         from agents.rule_alien import AlienAgent
-        return AlienAgent(grid=grid.copy(), start_pos=alien_start)
+        return AlienAgent(_grid=grid.copy(), start_pos=alien_start)
 
     # Create requested human agents
     for i in range(human_count):

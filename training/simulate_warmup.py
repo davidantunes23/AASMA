@@ -66,7 +66,7 @@ def build_initial_game(grid: np.ndarray, view_length: int) -> Game:
     alien_start = find_tile_pos(grid, Tile.ALIEN_START)
 
     human_agent = HumanAgent(start_pos=human_start, start_dir=HumanDirection.NORTH)
-    alien_agent = AlienAgent(grid=grid.copy(), start_pos=(alien_start[1], alien_start[0]))
+    alien_agent = AlienAgent(_grid=grid.copy(), start_pos=(alien_start[1], alien_start[0]))
 
     return Game(
         map=grid.copy(),

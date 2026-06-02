@@ -8,7 +8,6 @@ import numpy as np
 from agents.base import (
     BaseAlienAgent,
     Direction,
-    cone_fov,
     direction_from_delta,
 )
 
@@ -219,7 +218,7 @@ class AlienAgent(BaseAlienAgent):
     Uses directional cone FOV — can only see what is in front of it.
     """
 
-    grid: np.ndarray
+    _grid: np.ndarray
     start_pos: tuple[int, int]
     view_length: int = 6
     replan_every: int = 3
@@ -249,20 +248,52 @@ class AlienAgent(BaseAlienAgent):
         self.pos = start_pos or self.start_pos
         self.direction = Direction.SOUTH
         self.state = AlienState.SEARCH
-        self.knowledge = KnowledgeMap(self.grid)
-        self.belief = BeliefMap(self.grid)
+        self.knowledge = KnowledgeMap(self._grid)
+        self.belief = BeliefMap(self._grid)
         self.last_known_pos = None
         self.player_known_hiding = False
         self.last_heard_pos = None
         self.steps_since_heard = 0
         self.path = []
-        self.waypoints = build_waypoints(self.grid)
+        self.waypoints = build_waypoints(self._grid)
         self.wp_idx = 0
         self.steps_no_replan = 0
         self.steps_in_state = 0
         self.history = []
         self.vent_teleport_used = False
         self._rl_action_override = None
+        self._player_seen = False
+        self._player_hiding = False
+        self._player_pos = None
+
+    def observe(self, obs: np.ndarray, opponent_positions=None) -> None:
+        """Ingest cone observation and update knowledge/belief maps.
+
+        obs: full-grid-shaped array with UNKNOWN_TILE=-1 outside FOV, true tile IDs inside.
+        opponent_positions: list of (pos, hidden) tuples for alive human agents.
+        """
+        visible = {(int(y), int(x)) for y, x in zip(*np.where(obs != UNKNOWN))}
+
+        self._player_seen = False
+        self._player_hiding = False
+        self._player_pos = None
+
+        if opponent_positions:
+            by_distance = sorted(opponent_positions, key=lambda op: heuristic(self.pos, op[0]))
+            for pos, _hidden in by_distance:
+                py, px = pos
+                if (py, px) in visible:
+                    if obs[py, px] == HIDE:
+                        self._player_hiding = True
+                    else:
+                        self._player_seen = True
+                    self._player_pos = pos
+                    break  # stop at nearest visible opponent
+
+        self.knowledge.update_from_observation(
+            visible, obs, self._player_pos,
+            self._player_seen, self._player_hiding,
+        )
 
     def step(self, player_pos: tuple, heard_pos: tuple = None, step_num: int = 0) -> tuple:
         """Execute one step. player_pos and heard_pos are (y, x)."""
@@ -280,31 +311,30 @@ class AlienAgent(BaseAlienAgent):
             if self.steps_since_heard > 5:
                 self.last_heard_pos = None
 
-        # STEP 1: VISUAL PERCEPTION — cone FOV based on current direction
-        fov = cone_fov(self.grid, self.pos, self.direction, self.view_length)
-        py, px = player_pos
-        in_fov = (py, px) in fov
-        player_hiding = in_fov and self.grid[py, px] == HIDE
-        player_seen = in_fov and not player_hiding
-
-        # STEP 2: UPDATE KNOWLEDGE MAP
-        self.knowledge.update_from_observation(fov, self.grid, player_pos, player_seen, player_hiding)
+        # Visual perception state comes from observe(), called by the simulation each turn.
+        player_seen = self._player_seen
+        player_hiding = self._player_hiding
+        # observe() used pre-movement positions; refresh with post-movement nearest target
+        # so pursuit is accurate on the same tick the player was spotted.
+        if (player_seen or player_hiding) and player_pos is not None:
+            self._player_pos = player_pos
 
         # STEP 3: UPDATE BELIEF MAP WITH AUDITORY EVIDENCE
+        H, W = self.knowledge.knowledge.shape
         if sound_detected:
             hy, hx = heard_pos
-            if 0 <= hy < self.grid.shape[0] and 0 <= hx < self.grid.shape[1]:
+            if 0 <= hy < H and 0 <= hx < W:
                 for dy in [-1, 0, 1]:
                     for dx in [-1, 0, 1]:
                         ny, nx = hy + dy, hx + dx
-                        if 0 <= ny < self.grid.shape[0] and 0 <= nx < self.grid.shape[1]:
-                            if self.grid[ny, nx] in PASSABLE_PLAYER:
+                        if 0 <= ny < H and 0 <= nx < W:
+                            if self.belief.grid[ny, nx] in PASSABLE_PLAYER:
                                 self.belief.belief[ny, nx] += 0.1
         self.belief._norm()
 
         # STEP 4: STATE TRANSITION
         prev = self.state
-        self._transition(player_seen, player_hiding, player_pos)
+        self._transition(player_seen, player_hiding, self._player_pos)
         if self.state != prev:
             self.steps_in_state = 0
             self.path = []
@@ -325,14 +355,14 @@ class AlienAgent(BaseAlienAgent):
                 dy, dx = self._rl_action_override
                 y, x = self.pos
                 ny, nx = y + dy, x + dx
-                if (0 <= ny < self.grid.shape[0] and 0 <= nx < self.grid.shape[1]
-                        and self.grid[ny, nx] in PASSABLE_ALIEN):
+                if (0 <= ny < H and 0 <= nx < W
+                        and self.knowledge.knowledge[ny, nx] in PASSABLE_ALIEN):
                     new_pos = (ny, nx)
                     if new_pos != self.pos:
                         self.direction = direction_from_delta(dy, dx)
                     self.pos = new_pos
             else:
-                self.pos = self._move_one(player_pos, player_seen)
+                self.pos = self._move_one()
 
         self.steps_no_replan += 1
         self.history.append({
@@ -354,14 +384,14 @@ class AlienAgent(BaseAlienAgent):
         cy, cx = center
         explored = 0
         total = 0
+        H, W = self.knowledge.knowledge.shape
         for dy in range(-radius, radius + 1):
             for dx in range(-radius, radius + 1):
                 ny, nx = cy + dy, cx + dx
-                if 0 <= nx < self.grid.shape[1] and 0 <= ny < self.grid.shape[0]:
-                    if self.grid[ny, nx] in PASSABLE_ALIEN:
-                        total += 1
-                        if self.knowledge.knowledge[ny, nx] != UNKNOWN:
-                            explored += 1
+                if 0 <= ny < H and 0 <= nx < W:
+                    total += 1
+                    if self.knowledge.knowledge[ny, nx] != UNKNOWN:
+                        explored += 1
         return explored / total if total > 0 else 0.0
 
     def _chase_passable(self) -> set:
@@ -401,7 +431,8 @@ class AlienAgent(BaseAlienAgent):
         seen_vents = self.knowledge.get_seen_vents()
         if len(seen_vents) < 2:
             return None
-        direct_path = astar(self.grid, self.pos, sound_pos, PASSABLE_ALIEN)
+        km = self.knowledge.knowledge
+        direct_path = astar(km, self.pos, sound_pos, PASSABLE_ALIEN)
         direct_dist = len(direct_path) - 1 if direct_path else float("inf")
         if direct_dist < VENT_ROUTE_MIN_SOUND_DISTANCE:
             return None
@@ -409,31 +440,39 @@ class AlienAgent(BaseAlienAgent):
         dest_vent = min(seen_vents, key=lambda v: heuristic(v, sound_pos))
         if start_vent == dest_vent:
             return None
-        entry_path = astar(self.grid, self.pos, start_vent, PASSABLE_ALIEN)
+        entry_path = astar(km, self.pos, start_vent, PASSABLE_ALIEN)
         entry_dist = len(entry_path) - 1 if entry_path else float("inf")
-        exit_path = astar(self.grid, dest_vent, sound_pos, PASSABLE_ALIEN)
+        exit_path = astar(km, dest_vent, sound_pos, PASSABLE_ALIEN)
         exit_dist = len(exit_path) - 1 if exit_path else float("inf")
-        if direct_dist - (entry_dist + VENT_TELEPORT_COST + exit_dist) < VENT_ROUTE_MIN_SAVINGS:
-            return None
+        if exit_dist == float("inf"):
+            return None  # can't reach sound from exit vent
+        if direct_dist != float("inf"):
+            if direct_dist - (entry_dist + VENT_TELEPORT_COST + exit_dist) < VENT_ROUTE_MIN_SAVINGS:
+                return None
         return start_vent
 
     def _evaluate_vent_teleport(self, sound_pos: tuple) -> Optional[tuple]:
-        if self.grid[self.pos[0], self.pos[1]] != VENT:  # pos is (y, x)
+        py, px = self.pos
+        if self.knowledge.knowledge[py, px] != VENT:
             return None
         seen_vents = self.knowledge.get_seen_vents()
         if len(seen_vents) < 2:
             return None
-        direct_path = astar(self.grid, self.pos, sound_pos, PASSABLE_ALIEN)
+        km = self.knowledge.knowledge
+        direct_path = astar(km, self.pos, sound_pos, PASSABLE_ALIEN)
         direct_dist = len(direct_path) - 1 if direct_path else float("inf")
         if direct_dist < VENT_ROUTE_MIN_SOUND_DISTANCE:
             return None
         best_vent = min(seen_vents, key=lambda v: heuristic(v, sound_pos))
         if best_vent == self.pos:
             return None
-        exit_path = astar(self.grid, best_vent, sound_pos, PASSABLE_ALIEN)
+        exit_path = astar(km, best_vent, sound_pos, PASSABLE_ALIEN)
         exit_dist = len(exit_path) - 1 if exit_path else float("inf")
-        if direct_dist - (VENT_TELEPORT_COST + exit_dist) < VENT_ROUTE_MIN_SAVINGS:
-            return None
+        if exit_dist == float("inf"):
+            return None  # can't reach sound from exit vent
+        if direct_dist != float("inf"):
+            if direct_dist - (VENT_TELEPORT_COST + exit_dist) < VENT_ROUTE_MIN_SAVINGS:
+                return None
         return best_vent
 
     def _teleport_to_vent(self, target_vent: tuple):
@@ -442,11 +481,11 @@ class AlienAgent(BaseAlienAgent):
         self.path = []
         self.steps_no_replan = self.replan_every
 
-    def _move_one(self, player_pos: tuple, player_seen: bool) -> tuple:
+    def _move_one(self) -> tuple:
         # Always replan in HUNT so the 2-cell-per-step movement never overshoots
         # the player's position using a stale path from a previous step.
         if not self.path or self.steps_no_replan >= self.replan_every or self.state == AlienState.HUNT:
-            self.path = self._plan_path(player_pos, player_seen)
+            self.path = self._plan_path()
             self.steps_no_replan = 0
 
         new_pos = self.pos
@@ -459,7 +498,7 @@ class AlienAgent(BaseAlienAgent):
         if new_pos == self.pos:
             # Fallback: greedy step toward current objective
             if self.state == AlienState.HUNT:
-                fallback_goal = player_pos
+                fallback_goal = self.last_known_pos
             elif self.state == AlienState.INVESTIGATE:
                 fallback_goal = self.last_known_pos
             else:
@@ -479,12 +518,13 @@ class AlienAgent(BaseAlienAgent):
             passable = PASSABLE_ALIEN
         best_step = None
         best_dist = heuristic(self.pos, goal)
+        H, W = self.knowledge.knowledge.shape
         y, x = self.pos
         for dy, dx in DIRS:
             ny, nx = y + dy, x + dx
-            if not (0 <= nx < self.grid.shape[1] and 0 <= ny < self.grid.shape[0]):
+            if not (0 <= ny < H and 0 <= nx < W):
                 continue
-            if self.grid[ny, nx] not in passable:
+            if self.knowledge.knowledge[ny, nx] not in passable:
                 continue
             candidate = (ny, nx)
             candidate_dist = heuristic(candidate, goal)
@@ -493,14 +533,23 @@ class AlienAgent(BaseAlienAgent):
                 best_step = candidate
         return best_step
 
-    def _plan_path(self, player_pos: tuple, player_seen: bool) -> list:
+    def _plan_path(self) -> list:
+        km = self.knowledge.knowledge
         goal = self.pos
 
         if self.state == AlienState.HUNT:
-            return astar(self.grid, self.pos, player_pos, self._chase_passable())
+            path = astar(km, self.pos, self.last_known_pos, self._chase_passable())
+            if not path:
+                # last_known_pos not reachable through known cells — head toward nearest frontier
+                frontiers = [f for f in self.knowledge.get_unknown_frontier() if f != self.pos]
+                if frontiers:
+                    goal = min(frontiers, key=lambda f: heuristic(f, self.last_known_pos))
+                    path = astar(km, self.pos, goal, PASSABLE_ALIEN)
+            return path
 
         elif self.last_heard_pos is not None and self.steps_since_heard <= 5:
-            current_is_vent = self.grid[self.pos[0], self.pos[1]] == VENT
+            py, px = self.pos
+            current_is_vent = km[py, px] == VENT
             best_sound_vent = self._best_seen_vent_route_for_sound(self.last_heard_pos)
 
             sound_y, sound_x = self.last_heard_pos
@@ -519,18 +568,19 @@ class AlienAgent(BaseAlienAgent):
         elif self.state == AlienState.INVESTIGATE:
             if self.last_known_pos is None:
                 goal = self.pos
-            elif self.grid[self.last_known_pos[0], self.last_known_pos[1]] == HIDE:
+            elif km[self.last_known_pos[0], self.last_known_pos[1]] == HIDE:
                 if self.player_known_hiding:
                     # Confirmed: player was seen entering — rush in
-                    return astar(self.grid, self.pos, self.last_known_pos, PASSABLE_ALIEN_RUSH)
+                    return astar(km, self.pos, self.last_known_pos, PASSABLE_ALIEN_RUSH)
                 else:
                     # Suspected: patrol adjacent passable cells instead of freezing
                     hy, hx = self.last_known_pos
+                    H, W = km.shape
                     adjacent = [
                         (hy + dy, hx + dx) for dy, dx in DIRS
-                        if (0 <= hy + dy < self.grid.shape[0]
-                            and 0 <= hx + dx < self.grid.shape[1]
-                            and self.grid[hy + dy, hx + dx] in PASSABLE_ALIEN)
+                        if (0 <= hy + dy < H
+                            and 0 <= hx + dx < W
+                            and km[hy + dy, hx + dx] in PASSABLE_ALIEN)
                     ]
                     goal = min(adjacent, key=lambda p: heuristic(self.pos, p)) if adjacent else self.pos
             else:
@@ -552,4 +602,4 @@ class AlienAgent(BaseAlienAgent):
                     goal = self.waypoints[self.wp_idx % len(self.waypoints)]
                     self.wp_idx += 1
 
-        return astar(self.grid, self.pos, goal, PASSABLE_ALIEN)
+        return astar(km, self.pos, goal, PASSABLE_ALIEN)

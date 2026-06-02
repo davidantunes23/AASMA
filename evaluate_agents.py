@@ -209,13 +209,13 @@ def build_alien(
 ) -> object:
     if spec.key == "random":
         return RandomAlienAgent(
-            grid=grid.copy(),
+            _grid=grid.copy(),
             pos=start_pos,
             view_length=view_length,
             rng=random.Random(seed + 100),
         )
     if spec.key == "rule":
-        return AlienAgent(grid=grid.copy(), start_pos=start_pos, view_length=view_length)
+        return AlienAgent(_grid=grid.copy(), start_pos=start_pos, view_length=view_length)
     raise ValueError(f"Unknown alien model key: {spec.key}")
 
 

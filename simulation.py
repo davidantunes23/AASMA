@@ -1274,7 +1274,17 @@ class GenericMapSimulation:
                             radar_dist_by_label.get(spec.label),
                         )
                     else:
-                        spec.agent.observe(obs)
+                        alive_humans = [
+                            s for s in self.agents
+                            if s.role == "human"
+                            and s.label not in captured_humans
+                            and s.label not in escaped_humans
+                        ]
+                        opponent_positions = [
+                            (current_positions[s.label], getattr(s.agent, "hidden", False))
+                            for s in alive_humans
+                        ]
+                        spec.agent.observe(obs, opponent_positions=opponent_positions)
 
             # Reassign roles immediately if triggered by events (e.g. add_mission).
             # Periodic reassignment tick removed; use event-driven reassignment only.
