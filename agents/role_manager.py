@@ -139,33 +139,15 @@ def assign_workers_omniscient(
     return pairs
 
 
-def assign_runner_greedy(agent_specs: Sequence[object], exit_position: tuple[int, int] | None, alien_position: tuple[int, int] | None = None):
-    """Assign `TeamRole.RUNNER` to the human agent best positioned to reach the exit.
+def assign_runner_residual(agent_specs: Sequence[object]) -> str | None:
+    """Assign RUNNER to the first available agent (residual after Worker+Decoy).
 
-    Scoring favors closeness to exit and distance from the alien. Returns the
-    label of the chosen agent, or None.
+    This ignores exit/alien proximity: any leftover agent becomes the Runner,
+    making the role assignment independent of spawn geometry.
     """
     human_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
-
-    if exit_position is None or not human_specs:
+    if not human_specs:
         return None
+    return getattr(human_specs[0], "label", None)
 
-    best = None
-    best_score = None
-    for s in human_specs:
-        pos = getattr(s.agent, "pos", None)
-        if pos is None:
-            continue
-        dist_exit = abs(pos[0] - exit_position[0]) + abs(pos[1] - exit_position[1])
-        dist_alien = float('inf') if alien_position is None else (abs(pos[0] - alien_position[0]) + abs(pos[1] - alien_position[1]))
-        # score: prefer small dist_exit and large dist_alien
-        # Higher score means better RUNNER candidate: close to exit, far from alien.
-        score = -dist_exit + dist_alien
-        if best is None or score > best_score:
-            best = s
-            best_score = score
 
-    if best is None:
-        return None
-
-    return getattr(best, "label", None)

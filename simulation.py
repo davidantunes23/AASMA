@@ -21,7 +21,7 @@ from agents.role_manager import (
     assign_worker_greedy,
     assign_workers_omniscient,
     assign_decoy_farthest,
-    assign_runner_greedy,
+    assign_runner_residual,
     clear_roles,
 )
 from map_generator import Tile
@@ -806,44 +806,47 @@ class GenericMapSimulation:
                         needed_workers -= 1
             remaining_specs = [s for s in remaining_specs if getattr(s, "label", None) != chosen_label]
 
-        # Assign DECOY to a human. Prefer farthest from mission anchors.
-        # If there are no mission anchors (e.g. all missions completed), fall back
-        # to choosing the human farthest from the exit so we still pick a decoy.
-        role_anchors = active_missions + remaining_missions
-        if not role_anchors:
-            role_anchors = missions
-        decoy_label = assign_decoy_farthest(remaining_specs, role_anchors) if remaining_specs else None
-        # Fallback: when no anchors exist, pick farthest from exit (topology distance)
-        if decoy_label is None and remaining_specs:
-            exit_pos = self._exit_position()
-            if exit_pos is not None:
-                best = None
-                best_dist = -1
-                for s in remaining_specs:
-                    pos = getattr(s.agent, "pos", None)
-                    if pos is None:
-                        continue
-                    d = self._topology_distance(pos, exit_pos)
-                    if best is None or d > best_dist:
-                        best = s
-                        best_dist = d
-                decoy_label = getattr(best, "label", None) if best is not None else None
-            else:
-                # Ultimate fallback: pick any remaining spec (deterministic by label)
-                decoy_label = remaining_specs[0].label if remaining_specs else None
-        self._debug_log(f"assign_decoy_farthest: chosen={decoy_label}")
+        # Assign DECOY only when at least one worker is active — the Decoy's
+        # purpose is to draw the alien away from workers; without workers there
+        # is nothing to protect and the noise only draws attention for no gain.
+        any_worker_assigned = needed_workers > len(remaining_specs) or any(
+            getattr(s.agent, "current_mission", None) is not None
+            for s in human_specs
+            if getattr(s, "label", "") not in locked
+        ) or bool(locked)
+        decoy_label = None
+        if any_worker_assigned and remaining_specs:
+            role_anchors = active_missions + remaining_missions
+            if not role_anchors:
+                role_anchors = missions
+            decoy_label = assign_decoy_farthest(remaining_specs, role_anchors)
+            if decoy_label is None:
+                exit_pos = self._exit_position()
+                if exit_pos is not None:
+                    best = None
+                    best_dist = -1
+                    for s in remaining_specs:
+                        pos = getattr(s.agent, "pos", None)
+                        if pos is None:
+                            continue
+                        d = self._topology_distance(pos, exit_pos)
+                        if best is None or d > best_dist:
+                            best = s
+                            best_dist = d
+                    decoy_label = getattr(best, "label", None) if best is not None else None
+                else:
+                    decoy_label = remaining_specs[0].label
+        self._debug_log(f"assign_decoy: chosen={decoy_label}, any_worker={any_worker_assigned}")
         remaining_specs = [s for s in remaining_specs if getattr(s, "label", None) != decoy_label]
 
-        # Assign RUNNER from the remaining humans
-        exit_pos = self._exit_position()
-        runner_label = assign_runner_greedy(remaining_specs, exit_pos, None) if remaining_specs else None
-        self._debug_log(f"assign_runner_greedy: chosen={runner_label}, exit_pos={exit_pos}")
+        # All remaining agents become RUNNER — there can be more than one.
+        runner_labels = {getattr(s, "label", None) for s in remaining_specs}
+        self._debug_log(f"assign_runners: chosen={sorted(runner_labels)}")
 
         # Commit role assignments for non-locked humans
         for s in human_specs:
             label = getattr(s, "label", None)
             if label in locked:
-                # preserve locked workers
                 continue
             agent = getattr(s, "agent", None)
             if agent is None:
@@ -860,7 +863,7 @@ class GenericMapSimulation:
                 except Exception:
                     pass
                 continue
-            if label == runner_label:
+            if label in runner_labels:
                 try:
                     setattr(agent, "team_role", TeamRole.RUNNER)
                 except Exception:
@@ -870,9 +873,6 @@ class GenericMapSimulation:
                 setattr(agent, "team_role", TeamRole.NONE)
             except Exception:
                 pass
-
-        # Final safety net removed: do not auto-fill unassigned human roles.
-        self._debug_log("no_fallback: fill_unassigned_human_roles disabled")
 
         self._debug_log(
             f"reassign_done: roles_after={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
@@ -946,11 +946,11 @@ class GenericMapSimulation:
                 break
             remaining = [s for s in remaining if getattr(s, "label", None) != chosen_label]
 
-        # assign RUNNERs greedily
+        # assign RUNNERs (residual — first available leftover agent)
         for _ in range(counts.get("RUNNER", 0)):
             if not remaining:
                 break
-            chosen_label = assign_runner_greedy(remaining, exit_pos, None)
+            chosen_label = assign_runner_residual(remaining)
             if not chosen_label:
                 break
             remaining = [s for s in remaining if getattr(s, "label", None) != chosen_label]
