@@ -456,7 +456,7 @@ def build_episode_seeds(base_seed: int, width: int, height: int, episodes: int) 
     return [int(rng.integers(0, 2**31 - 1)) for _ in range(episodes)]
 
 
-def plot_rule_alien_comparison(
+def plot_survivor_count_comparison(
     labels: list[str],
     escaped_counts_by_label: dict[str, list[int]],
     output: str,
@@ -494,6 +494,69 @@ def plot_rule_alien_comparison(
 
     plt.close(fig)
 
+
+def plot_mission_completion_comparison(
+    labels: list[str],
+    mission_counts_by_label: dict[str, list[int]],
+    output: str,
+    show_window: bool,
+):
+    fig, ax = plt.subplots(figsize=(8.8, 4.9))
+
+    x = np.arange(len(labels))
+
+    colors = [
+        "#c0392b",  # 0 missions
+        "#f39c12",  # 1 mission
+        "#27ae60",  # 2 missions
+    ]
+
+    bottoms = np.zeros(len(labels))
+
+    for completed, color in enumerate(colors):
+        values = [
+            mission_counts_by_label.get(label, [0, 0, 0])[completed]
+            for label in labels
+        ]
+
+        ax.bar(
+            x,
+            values,
+            bottom=bottoms,
+            color=color,
+            label=f"{completed} missions",
+        )
+
+        bottoms += np.array(values)
+
+    ax.set_title("Mission completion vs rule-based alien")
+    ax.set_xlabel("human model")
+    ax.set_ylabel("episode count")
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+
+    ax.grid(True, axis="y", alpha=0.25)
+    ax.legend(loc="upper right")
+
+    if output:
+        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
+        fig.savefig(output, dpi=160, bbox_inches="tight")
+        print(f"Saved plot -> {output}")
+
+    if show_window:
+        has_display = bool(
+            os.environ.get("DISPLAY")
+            or os.environ.get("WAYLAND_DISPLAY")
+        )
+        backend = matplotlib.get_backend().lower()
+        if not has_display or backend == "agg":
+            plt.close(fig)
+            return
+        plt.show()
+        return
+
+    plt.close(fig)
 
 def plot_survival_curve(
     episodes: list[EpisodeMetrics],
@@ -574,6 +637,105 @@ def plot_capture_escape_timeline(
     ax.set_yticks(range(len(episodes)))
     ax.grid(True, axis="x", alpha=0.25)
     ax.set_xlim(0, max_episode_step)
+
+    if output:
+        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
+        fig.savefig(output, dpi=160, bbox_inches="tight")
+        print(f"Saved plot -> {output}")
+
+    if show_window:
+        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        backend = matplotlib.get_backend().lower()
+        if not has_display or backend == "agg":
+            plt.close(fig)
+            return
+        plt.show()
+        return
+
+    plt.close(fig)
+
+
+def plot_steps_boxplot(
+    labels: list[str],
+    episode_steps_by_label: dict[str, list[int]],
+    output: str,
+    show_window: bool,
+):
+    filtered_labels = []
+    filtered_data = []
+
+    for label in labels:
+        values = episode_steps_by_label.get(label, [])
+
+        if len(values) == 0:
+            continue
+
+        filtered_labels.append(label)
+        filtered_data.append(values)
+
+    if not filtered_data:
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    ax.boxplot(
+        filtered_data,
+        labels=filtered_labels,
+        showfliers=True,
+    )
+
+    ax.set_title("Episode duration vs rule-based alien")
+    ax.set_xlabel("human model")
+    ax.set_ylabel("steps")
+
+    plt.setp(
+        ax.get_xticklabels(),
+        rotation=20,
+        ha="right",
+    )
+
+    ax.grid(True, axis="y", alpha=0.25)
+
+    if output:
+        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
+        fig.savefig(output, dpi=160, bbox_inches="tight")
+        print(f"Saved plot -> {output}")
+
+    if show_window:
+        has_display = bool(
+            os.environ.get("DISPLAY")
+            or os.environ.get("WAYLAND_DISPLAY")
+        )
+        backend = matplotlib.get_backend().lower()
+
+        if not has_display or backend == "agg":
+            plt.close(fig)
+            return
+
+        plt.show()
+        return
+
+    plt.close(fig)
+
+def plot_bar_comparison(
+    labels: list[str],
+    values: list[float],
+    title: str,
+    ylabel: str,
+    output: str,
+    show_window: bool,
+):
+    fig, ax = plt.subplots(figsize=(8.8, 4.9))
+
+    x = np.arange(len(labels))
+    ax.bar(x, values)
+
+    ax.set_title(title)
+    ax.set_xlabel("human model")
+    ax.set_ylabel(ylabel)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=20, ha="right")
+    ax.grid(True, axis="y", alpha=0.25)
 
     if output:
         os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
@@ -709,6 +871,21 @@ def main() -> None:
         for spec in HUMAN_SPECS
     }
 
+    rule_alien_mission_totals: dict[str, list[int]] = {
+        spec.label: [0, 0, 0]  # completed 0,1,2 missions
+        for spec in HUMAN_SPECS
+    }
+
+    rule_alien_episode_steps: dict[str, list[int]] = {
+        spec.label: []
+        for spec in HUMAN_SPECS
+    }
+
+    rule_alien_steps_per_mission: dict[str, list[float]] = {
+        spec.label: []
+        for spec in HUMAN_SPECS
+    }
+
     print("Evaluating human vs alien pairings")
     for human_spec in selected_humans:
         for alien_spec in selected_aliens:
@@ -798,6 +975,23 @@ def main() -> None:
                         for idx in range(len(totals)):
                             totals[idx] += stats.escaped_counts[idx]
 
+                        rule_alien_episode_steps[human_spec.label].extend(
+                            ep.steps for ep in episodes
+                        )
+
+                        mission_histogram = rule_alien_mission_totals[human_spec.label]
+
+                        for ep in episodes:
+                            completed = ep.mission_counts[-1] if ep.mission_counts else 0
+                            completed = max(0, min(completed, MISSION_COUNT))
+                            mission_histogram[completed] += 1
+
+                        completed_missions = sum(mission_completed)
+                        if completed_missions > 0:
+                            rule_alien_steps_per_mission[human_spec.label].append(
+                                sum(ep.steps for ep in episodes) / completed_missions
+                            )
+
                     title = f"{pair_name} (map {width}x{height}, alpha={ALPHA:+.1f})"
                     survival_dir = plot_output_dir(
                         args.output_dir,
@@ -838,11 +1032,46 @@ def main() -> None:
     if any(spec.key == "rule" for spec in selected_aliens):
         comparison_dir = os.path.join(args.output_dir, "plots", "rule_alien_comparison")
         os.makedirs(comparison_dir, exist_ok=True)
-        comparison_output = os.path.join(comparison_dir, "rule_alien_human_comparison.png")
-        comparison_labels = [spec.label for spec in HUMAN_SPECS]
-        plot_rule_alien_comparison(
+
+        comparison_labels = [spec.label for spec in selected_humans]
+
+        comparison_output = os.path.join(comparison_dir, "survivor_counts.png")
+        plot_survivor_count_comparison(
             labels=comparison_labels,
             escaped_counts_by_label=rule_alien_totals,
+            output=comparison_output,
+            show_window=not args.no_show,
+        )
+
+        comparison_output = os.path.join(comparison_dir, "episode_steps_boxplot.png")
+
+        plot_steps_boxplot(
+            labels=comparison_labels,
+            episode_steps_by_label=rule_alien_episode_steps,
+            output=comparison_output,
+            show_window=not args.no_show,
+        )
+
+        comparison_output = os.path.join(comparison_dir, "mission_completion_counts.png")
+
+        plot_mission_completion_comparison(
+            labels=comparison_labels,
+            mission_counts_by_label=rule_alien_mission_totals,
+            output=comparison_output,
+            show_window=not args.no_show,
+        )
+
+        comparison_output = os.path.join(comparison_dir, "average_steps_per_mission.png")
+        plot_bar_comparison(
+            labels=comparison_labels,
+            values=[
+                np.mean(rule_alien_steps_per_mission[label])
+                if rule_alien_steps_per_mission[label]
+                else 0.0
+                for label in comparison_labels
+            ],
+            title="Average steps per completed mission",
+            ylabel="steps / mission",
             output=comparison_output,
             show_window=not args.no_show,
         )
