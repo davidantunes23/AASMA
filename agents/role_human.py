@@ -43,14 +43,10 @@ class RoleHumanAgent(BaseHumanAgent):
         start_dir: Direction = Direction.NORTH,
         view_length: int = 6,
     ):
+        super().__init__(pos=start_pos, direction=start_dir, view_length=view_length)
         self.agent_id: int = RoleHumanAgent._next_agent_id
         RoleHumanAgent._next_agent_id += 1
 
-        self.pos          = start_pos
-        self.direction    = start_dir
-        self.view_length  = view_length
-        self.hidden: bool = False             # True when standing on a HIDE tile
-        self.exit_open: bool = False          # set by simulation once all missions complete
         self.team_role: TeamRole | None = TeamRole.RUNNER  # default until role manager assigns
         self.last_radar_threat: str | None = None  # most recent radar band (CRITICAL/CLOSE/NEAR/FAR)
         self.last_radar_dist:   int | None = None  # topology distance to alien at last radar tick

@@ -114,9 +114,11 @@ def direction_from_delta(dy: int, dx: int) -> Direction:
 class BaseAgent(ABC):
     """Abstract base for every agent. All positions are (y, x) / (row, col)."""
 
-    pos: tuple[int, int]  # current position as (row, col)
-    direction: Direction  # current facing direction, determines FOV cone orientation
-    view_length: int      # how many cells deep the FOV cone reaches
+    def __init__(self, pos: tuple[int, int], direction: Direction, view_length: int = 6) -> None:
+        self.pos = pos                  # current (row, col) position
+        self.direction = direction      # facing direction, determines FOV cone orientation
+        self.view_length = view_length  # how many cells deep the FOV cone reaches
+        self.hidden = False             # True when standing on a HIDE tile; read by simulation on all agents
 
     @abstractmethod
     def step(
@@ -151,6 +153,7 @@ class BaseHumanAgent(BaseAgent):
     can update its internal knowledge map and radar state first.
     """
 
-    hidden: bool = False              # True when the agent is inside a HIDE tile
-    exit_open: bool = False           # set by simulation once all missions are completed
-    team_role: "TeamRole | None" = None  # assigned role (WORKER/RUNNER/DECOY); None if uncoordinated
+    def __init__(self, pos: tuple[int, int], direction: Direction = Direction.NORTH, view_length: int = 6) -> None:
+        super().__init__(pos, direction, view_length)
+        self.exit_open: bool = False           # set by simulation once all missions are completed
+        self.team_role: "TeamRole | None" = None  # assigned role (WORKER/RUNNER/DECOY); None if uncoordinated

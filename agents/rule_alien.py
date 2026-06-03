@@ -17,7 +17,6 @@ Map knowledge is built incrementally from cone observations delivered by the sim
 identical to how human agents work. No full map is available at construction time.
 """
 import heapq
-from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Optional
 
@@ -193,7 +192,6 @@ def build_waypoints(map_array: np.ndarray, n=6, seed=0):
     return chosen
 
 
-@dataclass
 class AlienAgent(BaseAlienAgent):
     """Rule-based alien with FSM, A* pathfinding, and vent routing.
 
@@ -202,29 +200,15 @@ class AlienAgent(BaseAlienAgent):
     Knowledge of the map is built incrementally from cone observations, same as humans.
     """
 
-    start_pos: tuple[int, int]   # spawn position used by reset()
-    view_length: int = 6         # FOV radius read by the simulation to build observations
-    replan_every: int = 3        # steps between A* replans (except HUNT which replans every step)
-
-    # All fields below are initialised in reset() via __post_init__.
-    pos: tuple[int, int]                     = field(init=False)
-    direction: Direction                     = field(init=False)
-    hidden: bool                             = field(default=False, init=False)  # always False; kept for interface
-    state: AlienState                        = field(init=False)
-    knowledge: Optional[KnowledgeMap]        = field(default=None, init=False)   # lazy-init on first observe()
-    last_known_pos: Optional[tuple]          = field(init=False)  # last position where player was visually confirmed
-    player_known_hiding: bool                = field(default=False, init=False)  # True when player was seen entering HIDE
-    last_heard_pos: Optional[tuple]          = field(init=False)  # most recent noise position received
-    steps_since_heard: int                   = field(init=False)  # steps elapsed since last sound cue
-    path: list                               = field(init=False)  # current A* path (list of (y,x) waypoints)
-    waypoints: list                          = field(init=False)  # patrol waypoints, built lazily
-    wp_idx: int                              = field(init=False)  # next waypoint index
-    steps_no_replan: int                     = field(init=False)  # steps since last A* replan
-    steps_in_state: int                      = field(init=False)  # steps spent in current FSM state
-    history: list                            = field(init=False)  # per-step debug log entries
-    _rl_action_override: Optional[tuple]     = field(init=False)  # (dy, dx) injected by RL training; None in normal play
-
-    def __post_init__(self):
+    def __init__(
+        self,
+        start_pos: tuple[int, int],
+        view_length: int = 6,
+        replan_every: int = 3,
+    ) -> None:
+        super().__init__(pos=start_pos, direction=Direction.SOUTH, view_length=view_length)
+        self.start_pos = start_pos    # spawn position used by reset()
+        self.replan_every = replan_every  # steps between A* replans (HUNT always replans)
         self.reset()
 
     def reset(self, start_pos=None):
@@ -242,8 +226,8 @@ class AlienAgent(BaseAlienAgent):
         self.steps_no_replan   = 0
         self.steps_in_state    = 0
         self.history           = []
-        self.vent_teleport_used = False
-        self._rl_action_override = None
+        self.vent_teleport_used  = False
+        # self._rl_action_override = None  # reserved for RL training — not used in rule-based play
         self._player_seen      = False
         self._player_hiding    = False
         self._player_pos       = None
@@ -328,19 +312,19 @@ class AlienAgent(BaseAlienAgent):
         H, W = self.knowledge.knowledge.shape
         steps = SPEED[self.state]
         for _ in range(steps):
-            if self._rl_action_override is not None:
-                # RL training can inject a direct (dy, dx) action.
-                dy, dx = self._rl_action_override
-                y, x = self.pos
-                ny, nx = y + dy, x + dx
-                if (0 <= ny < H and 0 <= nx < W
-                        and self.knowledge.knowledge[ny, nx] in PASSABLE_ALIEN):
-                    new_pos = (ny, nx)
-                    if new_pos != self.pos:
-                        self.direction = direction_from_delta(dy, dx)
-                    self.pos = new_pos
-            else:
-                self.pos = self._move_one()
+            # RL training hook (not active in rule-based play):
+            # if self._rl_action_override is not None:
+            #     dy, dx = self._rl_action_override
+            #     y, x = self.pos
+            #     ny, nx = y + dy, x + dx
+            #     if (0 <= ny < H and 0 <= nx < W
+            #             and self.knowledge.knowledge[ny, nx] in PASSABLE_ALIEN):
+            #         new_pos = (ny, nx)
+            #         if new_pos != self.pos:
+            #             self.direction = direction_from_delta(dy, dx)
+            #         self.pos = new_pos
+            # else:
+            self.pos = self._move_one()
 
         self.steps_no_replan += 1
         self.history.append({

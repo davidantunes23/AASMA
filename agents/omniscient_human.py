@@ -1,3 +1,17 @@
+"""Omniscient human agent — upper-bound performance baseline.
+
+At construction the full map grid, all exit coordinates, and all mission
+positions are pre-loaded into the agent's knowledge. This removes the
+exploration phase entirely: agents navigate directly to missions and the
+exit from step one.
+
+Alien position is NOT pre-loaded — the agent still reacts to radar threats
+exactly like RoleHumanAgent. This makes it a fair upper bound: it shows
+how much performance is limited by map exploration vs. alien avoidance.
+
+Used to benchmark how close coordinated (role/coop) agents get to the
+theoretical best a human team could achieve with perfect map knowledge.
+"""
 from __future__ import annotations
 
 import numpy as np
@@ -8,11 +22,7 @@ from map_generator import Tile
 
 
 class OmniscientHumanAgent(RoleHumanAgent):
-    """Upper-bound human agent: full map, all missions, and exit pre-known.
-
-    Alien position is NOT included — the agent still reacts to radar threats.
-    No RUNNER role: exit is always known so exploration-for-exit is obsolete.
-    """
+    """Upper-bound human agent: full map, all missions, and exit pre-known at start."""
 
     def __init__(
         self,
@@ -22,21 +32,19 @@ class OmniscientHumanAgent(RoleHumanAgent):
         view_length: int = 6,
     ) -> None:
         super().__init__(start_pos, start_dir, view_length)
-
-        # Store grid for reset().
-        self._grid = grid.copy()
-
-        # Override initial role — simulation will assign optimally on first add_mission.
-        self.team_role = TeamRole.NONE
-
+        self._grid = grid.copy()           # stored for reset() to restore omniscience each episode
+        self.team_role = TeamRole.NONE     # simulation assigns optimally on first add_mission
         self._apply_omniscience(grid)
 
     def _apply_omniscience(self, grid: np.ndarray) -> None:
+        """Pre-load the full map, exit position, and all mission positions."""
         self._known_map = grid.copy().astype(np.int16)
 
         ey, ex = np.where(grid == int(Tile.EXIT))
         self._known_exit = (int(ey[0]), int(ex[0])) if len(ey) > 0 else None
 
+        # Populate mission tracking structures so role assignment and navigation
+        # work correctly from step one without waiting for observations.
         self.mission_positions = []
         self._known_mission_coords = set()
         my, mx = np.where(grid == int(Tile.MISSION))
@@ -53,6 +61,7 @@ class OmniscientHumanAgent(RoleHumanAgent):
         radar_threat: str | None = None,
         radar_dist: int | None = None,
     ) -> None:
+        """Skip map integration — map is already fully known. Only update radar and alien sighting."""
         if radar_threat is not None:
             self.last_radar_threat = radar_threat
             self.last_radar_dist = radar_dist
@@ -60,14 +69,15 @@ class OmniscientHumanAgent(RoleHumanAgent):
         radar_active = np.any(obs == self.RADAR_PING)
         self._observed_aliens = {self.pos} if radar_active else set()
 
-    # ── remove_mission: also update _known_map ────────────────────────────────
+    # ── remove_mission: also clear the tile from the known map ───────────────
 
     def remove_mission(self, pos: tuple[int, int]) -> None:
+        """Mark the completed mission tile as FLOOR so navigation doesn't target it again."""
         super().remove_mission(pos)
         if self._known_map is not None and self._in_bounds(*pos):
             self._known_map[pos] = int(Tile.FLOOR)
 
-    # ── reset: restore full omniscience ──────────────────────────────────────
+    # ── reset: restore full omniscience for the next episode ─────────────────
 
     def reset(self, start_pos: tuple[int, int] | None = None) -> None:
         super().reset(start_pos)

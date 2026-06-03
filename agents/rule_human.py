@@ -39,11 +39,7 @@ class HumanAgent(BaseHumanAgent):
     NOISE_RIPPLE = -4   # sound ripple marker (ignored for map building)
 
     def __init__(self, start_pos: tuple[int, int], start_dir: Direction = Direction.NORTH, view_length: int = 6):
-        self.pos = start_pos
-        self.direction = start_dir
-        self.view_length = view_length
-        self.hidden: bool = False             # True when standing on a HIDE tile
-        self.exit_open: bool = False          # set by simulation once all missions complete
+        super().__init__(pos=start_pos, direction=start_dir, view_length=view_length)
         self.last_radar_threat: str | None = None  # most recent radar band (CRITICAL/CLOSE/NEAR/FAR)
         self.last_radar_dist: int | None = None    # topology distance to alien at last radar tick
         self._known_map: np.ndarray | None = None  # tile map built from cone observations

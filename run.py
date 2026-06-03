@@ -113,7 +113,7 @@ def build_agents(
     def make_human_instance(ix: int, human_start: tuple[int, int]):
         if human_class == "random" or demo == "random":
             from agents.random_human import RandomHumanAgent
-            return RandomHumanAgent(grid=grid.copy(), pos=human_start, rng=random.Random(seed + ix))
+            return RandomHumanAgent(pos=human_start, rng=random.Random(seed + ix))
         if human_class == "role":
             from agents.role_human import RoleHumanAgent
             from agents.base import Direction

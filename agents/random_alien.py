@@ -1,6 +1,5 @@
 """Random-walking alien agent used as a baseline for evaluation."""
 import random
-from dataclasses import dataclass, field
 from typing import Optional
 
 import numpy as np
@@ -13,7 +12,6 @@ UNKNOWN = -1
 PASSABLE_ALIEN = {1, 2, 4, 5, 6}
 
 
-@dataclass
 class RandomAlienAgent(BaseAlienAgent):
     """Alien that moves randomly each step.
 
@@ -24,21 +22,19 @@ class RandomAlienAgent(BaseAlienAgent):
     Used as a lower-bound baseline — no pursuit, no memory of players.
     """
 
-    pos: tuple                   # current (y, x) position
-    view_length: int = 6         # FOV radius read by the simulation to build observations
-    rng: random.Random = field(default_factory=random.Random, repr=False)  # per-agent RNG
-    direction: Direction = field(default=Direction.SOUTH, init=False)  # current facing direction
-    hidden: bool = field(default=False, init=False)      # aliens never hide; kept for interface compatibility
-    _known_map: Optional[np.ndarray] = field(default=None, init=False, repr=False)  # observed tile map
-    seen_vents: set = field(default_factory=set, init=False, repr=False)  # vent positions discovered so far
+    def __init__(self, pos: tuple, view_length: int = 6, rng: Optional[random.Random] = None):
+        super().__init__(pos=pos, direction=Direction.SOUTH, view_length=view_length)
+        self.rng = rng if rng is not None else random.Random()  # per-agent RNG
+        self._known_map: Optional[np.ndarray] = None  # tile map built from cone observations
+        self.seen_vents: set = set()                  # vent positions discovered so far
 
-    def reset(self, start_pos: Optional[tuple] = None):
+    def reset(self, start_pos: Optional[tuple] = None) -> None:
         if start_pos is not None:
             self.pos = start_pos
         self._known_map = None
         self.seen_vents = set()
 
-    def observe(self, obs: np.ndarray, _opponent_positions=None) -> None:
+    def observe(self, obs: np.ndarray, **_kwargs) -> None:
         """Ingest cone observation, updating the known map and vent registry."""
         if self._known_map is None:
             self._known_map = np.full(obs.shape, UNKNOWN, dtype=np.int16)
