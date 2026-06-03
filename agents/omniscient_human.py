@@ -32,19 +32,19 @@ class OmniscientHumanAgent(RoleHumanAgent):
         view_length: int = 6,
     ) -> None:
         super().__init__(start_pos, start_dir, view_length)
-        self._grid = grid.copy()           # stored for reset() to restore omniscience each episode
-        self.team_role = TeamRole.NONE     # simulation assigns optimally on first add_mission
+        self._grid = grid.copy()       # kept so reset() can restore omniscience each episode
+        self.team_role = TeamRole.NONE # defer role assignment until simulation registers missions
         self._apply_omniscience(grid)
 
     def _apply_omniscience(self, grid: np.ndarray) -> None:
         """Pre-load the full map, exit position, and all mission positions."""
-        self._known_map = grid.copy().astype(np.int16)
+        self._known_map = grid.copy().astype(np.int16)  # full map visible from step one
 
         ey, ex = np.where(grid == int(Tile.EXIT))
         self._known_exit = (int(ey[0]), int(ex[0])) if len(ey) > 0 else None
 
         # Populate mission tracking structures so role assignment and navigation
-        # work correctly from step one without waiting for observations.
+        # work correctly from step one without waiting for cone observations.
         self.mission_positions = []
         self._known_mission_coords = set()
         my, mx = np.where(grid == int(Tile.MISSION))
@@ -66,8 +66,8 @@ class OmniscientHumanAgent(RoleHumanAgent):
             self.last_radar_threat = radar_threat
             self.last_radar_dist = radar_dist
         self.hidden = self._tile_at(self.pos) == int(Tile.HIDE)
-        radar_active = np.any(obs == self.RADAR_PING)
-        self._observed_aliens = {self.pos} if radar_active else set()
+        radar_active = np.any(obs == self.RADAR_PING)  # radar ping means alien is nearby
+        self._observed_aliens = {self.pos} if radar_active else set()  # treat own cell as danger zone
 
     # ── remove_mission: also clear the tile from the known map ───────────────
 
@@ -75,7 +75,7 @@ class OmniscientHumanAgent(RoleHumanAgent):
         """Mark the completed mission tile as FLOOR so navigation doesn't target it again."""
         super().remove_mission(pos)
         if self._known_map is not None and self._in_bounds(*pos):
-            self._known_map[pos] = int(Tile.FLOOR)
+            self._known_map[pos] = int(Tile.FLOOR)  # rewrite so A*/BFS won't route back here
 
     # ── reset: restore full omniscience for the next episode ─────────────────
 

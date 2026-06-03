@@ -42,7 +42,7 @@ def assign_worker_greedy(
         pos = getattr(s.agent, "pos", None)
         if pos is None:
             continue
-        min_d = min(abs(pos[0] - m[0]) + abs(pos[1] - m[1]) for m in missions)
+        min_d = min(abs(pos[0] - m[0]) + abs(pos[1] - m[1]) for m in missions)  # nearest mission
         if best is None or min_d < best_dist:
             best = s
             best_dist = min_d
@@ -83,18 +83,19 @@ def assign_decoy_farthest(
     if not missions or not human_specs:
         return None
 
+    # Sync mission list into each agent so their internal heuristics stay current.
     for s in human_specs:
         if hasattr(s.agent, "mission_positions"):
             setattr(s.agent, "mission_positions", missions)
 
     best = None
-    best_score = -1
+    best_score = -1  # any real distance will exceed this sentinel
     for s in human_specs:
         pos = getattr(s.agent, "pos", None)
         if pos is None:
             continue
-        min_d = min(abs(pos[0] - m[0]) + abs(pos[1] - m[1]) for m in missions)
-        if min_d > best_score:
+        min_d = min(abs(pos[0] - m[0]) + abs(pos[1] - m[1]) for m in missions)  # closest mission
+        if min_d > best_score:  # decoy should be far from ALL missions
             best = s
             best_score = min_d
 
@@ -123,7 +124,7 @@ def assign_workers_omniscient(
     if not missions or not available_specs:
         return []
 
-    n_workers = min(len(missions), len(available_specs))
+    n_workers = min(len(missions), len(available_specs))  # can't assign more workers than missions
     available_missions = list(missions)
     pairs: list[tuple[object, tuple[int, int]]] = []
 
@@ -133,6 +134,7 @@ def assign_workers_omniscient(
         best_spec = None
         best_mission = None
         best_dist = float("inf")
+        # Find the globally closest (agent, mission) pair across all remaining combinations.
         for s in available_specs:
             pos = getattr(s.agent, "pos", None)
             if pos is None:
@@ -146,8 +148,8 @@ def assign_workers_omniscient(
         if best_spec is None:
             break
         pairs.append((best_spec, best_mission))
-        available_specs.remove(best_spec)
-        available_missions.remove(best_mission)
+        available_specs.remove(best_spec)      # agent is now assigned
+        available_missions.remove(best_mission)  # mission is now claimed
 
     return pairs
 

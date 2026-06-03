@@ -54,8 +54,10 @@ class SharedBeliefMap:
 
     def is_targeted_by_other(self, pos: tuple[int, int], my_id: int) -> bool:
         """True if any other agent has registered pos as their current frontier target."""
+        # Used by BFS to skip cells already claimed, partitioning exploration across the team.
         return any(t == pos for aid, t in self._targets.items() if aid != my_id)
 
     def other_positions(self, my_id: int) -> set[tuple[int, int]]:
         """Positions of all agents except my_id — used by the decoy noise proximity check."""
+        # Lets the decoy avoid emitting noise when a teammate is standing nearby.
         return {p for aid, p in self._positions.items() if aid != my_id}

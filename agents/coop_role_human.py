@@ -15,9 +15,6 @@ Extends RoleHumanAgent with two cooperative mechanisms:
 3. **Noise suppression** — the DECOY role suppresses loud-noise bursts when a
    teammate is within TEAMMATE_NOISE_BLOCK_RADIUS cells, preventing the alien
    from being drawn toward the whole team instead of away from missions.
-
-Degrades gracefully to solo RoleHumanAgent behaviour when used alone
-(shared_map is never wired up).
 """
 from __future__ import annotations
 
