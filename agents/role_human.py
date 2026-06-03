@@ -150,44 +150,7 @@ class RoleHumanAgent(BaseHumanAgent):
         if self.team_role == TeamRole.WORKER:
             return self._worker_step()
 
-        # Fallback (no role assigned): run to exit if open, otherwise try to be
-        # useful by heading toward the nearest known uncompleted mission before
-        # falling back to exploration (avoids orbiting when map is fully known).
-        if self.exit_open and self._known_exit is not None:
-            nxt = self._step_toward_target(self._known_exit)
-            if nxt is not None and nxt != self.pos:
-                self.pos    = nxt
-                self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                return self.pos
-
-        # If there are known missions, head toward the nearest one before
-        # resorting to generic explore, which can orbit when the map is fully known.
-        if self.mission_positions:
-            nearest = min(
-                self.mission_positions,
-                key=lambda m: abs(m[0] - self.pos[0]) + abs(m[1] - self.pos[1]),
-            )
-            nxt = self._step_toward_target(nearest)
-            if nxt is not None and nxt != self.pos:
-                self.direction = self._direction_from_step(self.pos, nxt)
-                self.pos       = nxt
-                self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                return self.pos
-
-        adj   = self._adjacent_unknown_step()
-        front = None if adj is not None else self._next_step_to_nearest_floor_frontier()
-        best  = None if (adj is not None or front is not None) else self._best_local_move()
-        nxt   = adj or front or best
-
-        if self._is_observed_alien(nxt):
-            nxt = None
-
-        if nxt is not None and nxt != self.pos:
-            self.direction = self._direction_from_step(self.pos, nxt)
-            self.pos       = nxt
-
-        self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-        return self.pos
+        return self._explorer_step()
 
     def reset(self, start_pos: tuple[int, int] | None = None) -> None:
         if start_pos is not None:
