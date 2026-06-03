@@ -15,8 +15,9 @@ from collections import deque
 import numpy as np
 
 from agents.base import BaseHumanAgent, Direction, TeamRole
-from agents.coord_bus import CoordType, CoordMessage
+from agents.coord_bus import CoordMessage, CoordType
 from map_generator import Tile
+
 
 class RoleHumanAgent(BaseHumanAgent):
     """Role-aware human agent built on top of BFS navigation and partial map knowledge.
@@ -190,6 +191,9 @@ class RoleHumanAgent(BaseHumanAgent):
         self.last_radar_threat    = None
         self.last_radar_dist      = None
         self._outbox.clear()
+        self._nav_path            = []
+        self._nav_target          = None
+        self._steps_on_path       = 0
         self.mission_positions        = []
         self._known_mission_coords    = set()
         self._seen_mission_coords     = set()
@@ -249,6 +253,9 @@ class RoleHumanAgent(BaseHumanAgent):
         self._known_map       = np.full(obs.shape, self.UNKNOWN, dtype=np.int16)
         self._known_exit      = None
         self._observed_aliens = set()
+        self._nav_path        = []
+        self._nav_target      = None
+        self._steps_on_path   = 0
 
     def _integrate_observation(self, obs: np.ndarray) -> None:
         """Copy visible tile IDs into the known map and broadcast new discoveries."""
@@ -297,13 +304,6 @@ class RoleHumanAgent(BaseHumanAgent):
                 ))
 
     # ── Navigation ────────────────────────────────────────────────────────────
-
-    def _step_toward_target(self, target: tuple[int, int]) -> tuple[int, int] | None:
-        """BFS next step toward a specific cell."""
-        nxt = self._bfs_next_step(lambda pos: pos == target)
-        if nxt is not None and nxt != self.pos:
-            self.direction = self._direction_from_step(self.pos, nxt)
-        return nxt
 
     def _next_step_to_nearest_floor_frontier(self) -> tuple[int, int] | None:
         """BFS next step toward the nearest FLOOR cell adjacent to unknown space."""
