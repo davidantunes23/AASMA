@@ -370,7 +370,6 @@ class MapGenerator:
         self.grid[ey, ex] = Tile.EXIT
         self.exit_pos = (ex, ey)
 
-        # Track special tile positions to avoid overwriting them
         special_tiles = {(px, py), (ax, ay), (ex, ey)}
 
         # Vents

@@ -478,12 +478,29 @@ class AlienAgent(BaseAlienAgent):
         if new_pos == self.pos:
             # Path exhausted or blocked — take a greedy step toward the current goal.
             if self.state in (AlienState.HUNT, AlienState.INVESTIGATE):
-                fallback_goal = self.last_known_pos
-            else:
-                fallback_goal = self.last_heard_pos
-            greedy = self._greedy_step_toward(fallback_goal, self._chase_passable())
-            if greedy is not None:
-                new_pos = greedy
+                greedy = self._greedy_step_toward(self.last_known_pos, self._chase_passable())
+                if greedy is not None:
+                    new_pos = greedy
+            elif self.state == AlienState.SEARCH:
+                # Check whether the current cell is a frontier (has an unknown neighbour).
+                km = self.knowledge.knowledge
+                H, W = km.shape
+                ky, kx = self.pos
+                unknown_dir = None
+                for dy, dx in DIRS:
+                    ny, nx = ky + dy, kx + dx
+                    if 0 <= ny < H and 0 <= nx < W and km[ny, nx] == UNKNOWN:
+                        unknown_dir = direction_from_delta(dy, dx)
+                        break
+                if unknown_dir is not None:
+                    # At a frontier: rotate toward the unknown neighbour so the cone
+                    # observation on the next tick can resolve it.  Don't greedy-step
+                    # backward — that causes the 2-cell oscillation near HIDE tiles.
+                    self.direction = unknown_dir
+                elif self.last_heard_pos is not None:
+                    greedy = self._greedy_step_toward(self.last_heard_pos, PASSABLE_ALIEN)
+                    if greedy is not None:
+                        new_pos = greedy
 
         if new_pos != self.pos:
             self.direction = direction_from_delta(new_pos[0] - self.pos[0], new_pos[1] - self.pos[1])

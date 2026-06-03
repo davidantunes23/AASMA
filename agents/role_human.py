@@ -150,29 +150,7 @@ class RoleHumanAgent(BaseHumanAgent):
         if self.team_role == TeamRole.WORKER:
             return self._worker_step()
 
-        # Fallback (no role assigned): run to exit if open, otherwise explore.
-        if self.exit_open and self._known_exit is not None:
-            nxt = self._step_toward_target(self._known_exit)
-            if nxt is not None and nxt != self.pos:
-                self.pos    = nxt
-                self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                return self.pos
-
-        nxt = self._adjacent_unknown_step()
-        if nxt is None:
-            nxt = self._next_step_to_nearest_floor_frontier()
-        if nxt is None:
-            nxt = self._best_local_move()
-
-        if self._is_observed_alien(nxt):
-            nxt = None
-
-        if nxt is not None and nxt != self.pos:
-            self.direction = self._direction_from_step(self.pos, nxt)
-            self.pos       = nxt
-
-        self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-        return self.pos
+        return self._explorer_step()
 
     def reset(self, start_pos: tuple[int, int] | None = None) -> None:
         if start_pos is not None:
@@ -422,7 +400,7 @@ class RoleHumanAgent(BaseHumanAgent):
     def _should_hide_now(self) -> bool:
         """Decide whether to seek a hiding spot this step.
 
-        Exception: if the exit is known and very close (≤15 cells away) a CLOSE
+        Exception: if the exit is known and very close (≤8 cells away) a CLOSE
         threat is worth ignoring — the agent can reach the exit before the alien.
         """
         if self.last_radar_threat is None:
@@ -432,7 +410,7 @@ class RoleHumanAgent(BaseHumanAgent):
         if self.last_radar_threat == "CLOSE":
             if self._known_exit is not None:
                 dist = abs(self._known_exit[0] - self.pos[0]) + abs(self._known_exit[1] - self.pos[1])
-                if dist <= 15:
+                if dist <= 8:
                     return False
             return True
         return False

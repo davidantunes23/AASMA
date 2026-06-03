@@ -47,10 +47,12 @@ class OmniscientHumanAgent(RoleHumanAgent):
         # work correctly from step one without waiting for cone observations.
         self.mission_positions = []
         self._known_mission_coords = set()
+        self._seen_mission_coords = set()
         my, mx = np.where(grid == int(Tile.MISSION))
         for y, x in zip(my.tolist(), mx.tolist()):
             pos = (int(y), int(x))
             self._known_mission_coords.add(pos)
+            self._seen_mission_coords.add(pos)
             self.mission_positions.append(pos)
 
     # ── observe: radar only, no map learning ─────────────────────────────────

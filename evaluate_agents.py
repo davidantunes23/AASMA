@@ -397,6 +397,7 @@ def evaluate_matchup(
     human_spec: HumanSpec,
     alien_spec: AlienSpec,
     p_noise: float = 0.10,
+    stop_on_timeout: bool = False,
 ) -> MatchupMetrics:
     escaped_counts = [0, 0, 0, 0]
     total_steps = 0
@@ -426,6 +427,11 @@ def evaluate_matchup(
             alien_spec=alien_spec,
             p_noise=p_noise,
         )
+        if stop_on_timeout and run.outcome == "max_steps_reached":
+            print(f"\n[STOP] max_steps reached: seed={episode_seed}, map={width}x{height}, human={human_spec.key}")
+            print(f"python run.py --human-class {human_spec.key} --human-count {human_spec.count} --seed {episode_seed} --width {width} --height {height} --max-steps {max_steps} --no-show")
+            sys.exit(0)
+
         metrics = extract_episode_metrics(
             seed=episode_seed,
             run=run,
@@ -847,10 +853,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--noise-prob", type=float, default=0.10,
                         help="Probability of emitting noise each step (default: 0.10)")
+    parser.add_argument("--stop-on-timeout", action="store_true",
+                        help="Print seed and exit on first max-steps episode")
     parser.add_argument(
-        "--no-show",
+        "--show",
         action="store_true",
-        help="Do not open a matplotlib window",
+        help="Open a matplotlib window for each plot (default: save only)",
     )
     return parser.parse_args()
 
@@ -922,6 +930,7 @@ def main() -> None:
                         human_spec=human_spec,
                         alien_spec=alien_spec,
                         p_noise=args.noise_prob,
+                        stop_on_timeout=args.stop_on_timeout,
                     )
                     stats = matchup.escape_stats
                     episodes = matchup.episodes
@@ -1011,7 +1020,7 @@ def main() -> None:
                             survival_dir,
                             f"survival_curve_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
                         ),
-                        show_window=not args.no_show,
+                        show_window=args.show,
                     )
                     timeline_dir = plot_output_dir(
                         args.output_dir,
@@ -1028,7 +1037,7 @@ def main() -> None:
                             timeline_dir,
                             f"capture_escape_timeline_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
                         ),
-                        show_window=not args.no_show,
+                        show_window=args.show,
                     )
 
     if any(spec.key == "rule" for spec in selected_aliens):
@@ -1042,7 +1051,7 @@ def main() -> None:
             labels=comparison_labels,
             escaped_counts_by_label=rule_alien_totals,
             output=comparison_output,
-            show_window=not args.no_show,
+            show_window=args.show,
         )
 
         comparison_output = os.path.join(comparison_dir, "episode_steps_boxplot.png")
@@ -1051,7 +1060,7 @@ def main() -> None:
             labels=comparison_labels,
             episode_steps_by_label=rule_alien_episode_steps,
             output=comparison_output,
-            show_window=not args.no_show,
+            show_window=args.show,
         )
 
         comparison_output = os.path.join(comparison_dir, "mission_completion_counts.png")
@@ -1091,7 +1100,7 @@ def main() -> None:
             labels=comparison_labels,
             mission_counts_by_label=rule_alien_mission_totals,
             output=comparison_output,
-            show_window=not args.no_show,
+            show_window=args.show,
         )
 
         comparison_output = os.path.join(comparison_dir, "average_steps_per_mission.png")
@@ -1106,7 +1115,7 @@ def main() -> None:
             title="Average steps per completed mission",
             ylabel="steps / mission",
             output=comparison_output,
-            show_window=not args.no_show,
+            show_window=args.show,
         )
 
 
