@@ -121,8 +121,6 @@ class HumanAgent(BaseHumanAgent):
         if nxt is None:
             nxt = self._next_step_to_nearest_floor_frontier()
         if nxt is None:
-            nxt = self._next_step_to_nearest_frontier()
-        if nxt is None:
             nxt = self._best_local_move()
 
         if self._is_observed_alien(nxt):
@@ -256,10 +254,6 @@ class HumanAgent(BaseHumanAgent):
             return None
         candidates.sort(key=lambda item: self._turn_cost(self.direction, item[1]))
         return candidates[0][0]
-
-    def _next_step_to_nearest_frontier(self) -> tuple[int, int] | None:
-        """BFS next step toward the nearest traversable frontier (any tile type)."""
-        return self._bfs_next_step(self._is_frontier)
 
     def _bfs_next_step(self, is_target) -> tuple[int, int] | None:
         """Generic BFS that returns the first step on the shortest path to any
