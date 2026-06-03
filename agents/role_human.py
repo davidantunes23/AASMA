@@ -652,19 +652,9 @@ class RoleHumanAgent(BaseHumanAgent):
                 and self.missions_remaining > len(self._known_mission_coords)
             )
 
-        # PRIORITY 1: Exit known but locked and all missions accounted for →
+        # PRIORITY 1: Exit known but locked and all missions accounted for —
         # stage in the cell adjacent to the exit ready to sprint through.
         if self._known_exit is not None and not missing_missions:
-            if self.last_radar_threat in {"CRITICAL", "CLOSE"}:
-                spot = self._get_closest_hiding_spot()
-                if spot is not None:
-                    nxt = self._step_toward_target(spot)
-                    if nxt is not None and nxt != self.pos:
-                        self.direction = self._direction_from_step(self.pos, nxt)
-                        self.pos       = nxt
-                        self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                        return self.pos
-                return self.pos
             nxt = self._step_toward_exit_area()
             if nxt is None or nxt == self.pos:
                 # Path to exit area unknown — explore to fill the gap.
