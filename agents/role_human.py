@@ -437,7 +437,7 @@ class RoleHumanAgent(BaseHumanAgent):
     def _should_hide_now(self) -> bool:
         """Decide whether to seek a hiding spot this step.
 
-        Exception: if the exit is known and very close (≤15 cells away) a CLOSE
+        Exception: if the exit is known and very close (≤8 cells away) a CLOSE
         threat is worth ignoring — the agent can reach the exit before the alien.
         """
         if self.last_radar_threat is None:
@@ -447,7 +447,7 @@ class RoleHumanAgent(BaseHumanAgent):
         if self.last_radar_threat == "CLOSE":
             if self._known_exit is not None:
                 dist = abs(self._known_exit[0] - self.pos[0]) + abs(self._known_exit[1] - self.pos[1])
-                if dist <= 15:
+                if dist <= 8:
                     return False
             return True
         return False
