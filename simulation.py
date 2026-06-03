@@ -29,16 +29,20 @@ from map_generator import Tile
 KnowledgeMode = Literal["off", "on"]
 AgentRole = Literal["human", "alien", "other"]
 
-UNKNOWN_TILE = -1
-PLAYER_SEEN_TILE = -2
-RADAR_PING_TILE = -3
-NOISE_RIPPLE_TILE = -4
+# Sentinel values written into observation arrays by the simulation.
+# Negative so they cannot be confused with valid tile IDs (0–7).
+UNKNOWN_TILE = -1      # cell outside the agent's current FOV
+PLAYER_SEEN_TILE = -2  # written into alien knowledge map at last known player cell
+RADAR_PING_TILE = -3   # injected into human obs when radar fires
+NOISE_RIPPLE_TILE = -4 # injected to show where a sound ripple originated
 
+# Topology distance thresholds (BFS steps) that map to radar threat levels.
+# Distances are measured on the actual grid, not Euclidean.
 RADAR_BANDS = {
-    "CRITICAL": (0, 7),
-    "CLOSE": (8, 12),
-    "NEAR": (13, 18),
-    "FAR": (19, float("inf")),
+    "CRITICAL": (0, 7),           # alien is adjacent or very close
+    "CLOSE":    (8, 12),          # alien is in the same room or corridor
+    "NEAR":     (13, 18),         # alien is one or two rooms away
+    "FAR":      (19, float("inf")),  # alien is far — safe to act freely
 }
 
 
@@ -251,8 +255,8 @@ class GenericMapSimulation:
         self._active_frame: SimulationFrame | None = None
         self._last_role_by_agent_id: dict[int, str] = {}
         # Enforce a minimum dwell time on mission tiles. Default minimum is 20 steps.
-        self.mission_steps_required: int = max(20, int(mission_steps) if mission_steps is not None else 20)
-        self._mission_dwell_progress: dict[tuple[int, int], int] = {}
+        self.mission_steps_required: int = int(mission_steps) if mission_steps is not None else 20  # steps a human must spend on a mission tile to complete it
+        self._mission_dwell_progress: dict[tuple[int, int], int] = {}  # accumulated dwell steps per mission tile; never resets on leave
 
         # Debug log for role/mission reassignment decisions (opt-in via debug_log=True).
         if debug_log:
@@ -391,6 +395,7 @@ class GenericMapSimulation:
     # ── Game mechanics (radar, noise, cone observation) ───────────────────────
 
     def _topology_distance(self, start: tuple[int, int], goal: tuple[int, int]) -> int:
+        """BFS distance through passable tiles. Falls back to Manhattan if no path exists."""
         if start == goal:
             return 0
         frontier = deque([(start, 0)])
@@ -1212,7 +1217,8 @@ class GenericMapSimulation:
                 self._active_frame = None
                 return frames, outcome or "max_steps_reached"
 
-            # Update radar before agents act so humans can react to current threat level
+            # Update radar before agents act so humans can react to the current threat level.
+            # Radar fires every radar_interval steps and stays active for 2 steps after firing.
             radar_threat_by_label: dict[str, str | None] = {}
             radar_dist_by_label: dict[str, int | None] = {}
             if self.enable_mechanics:
@@ -1325,7 +1331,8 @@ class GenericMapSimulation:
                         if to_deliver:
                             agent.receive_coords(to_deliver)
 
-            # Second pass: humans act first so they can set made_loud_noise etc.
+            # Second pass: humans move first, then aliens. This ordering means the
+            # alien reacts to post-move human positions, not pre-move ones.
             alien_positions = [self._get_position(s) for s in self.agents if s.role == "alien"]
             mission_positions_touched: set[tuple[int, int]] = set()
             for spec in [s for s in self.agents if s.role == "human" and s.label not in captured_humans and s.label not in escaped_humans]:
@@ -1431,6 +1438,8 @@ class GenericMapSimulation:
                         continue
                     if self._rng.random() < self.p_noise:
                         h_pos_yx = self._get_position(hs)
+                        # Jitter the sound position by up to noise_radius cells so the
+                        # alien gets an approximate location, not the exact human position.
                         off_y = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
                         off_x = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
                         ny = max(0, min(h_pos_yx[0] + off_y, self.grid.shape[0] - 1))
@@ -1438,6 +1447,8 @@ class GenericMapSimulation:
                         noise_sources.append((h_pos_yx, (ny, nx)))
 
                 if noise_sources:
+                    # Only one noise event reaches the alien per step — pick randomly
+                    # to avoid giving the alien perfect multi-source triangulation.
                     idx = int(self._rng.integers(len(noise_sources)))
                     h_pos_yx, heard_yx_for_aliens = noise_sources[idx]
                     self.last_noise_ripple = h_pos_yx
@@ -1449,7 +1460,7 @@ class GenericMapSimulation:
                         self.last_noise_ripple = None
                         self.last_noise_deliberate = False
 
-            # Third pass: aliens act using heard_yx_for_aliens and updated human positions
+            # Third pass: aliens act with the post-move human positions and the noise signal.
             for spec in [s for s in self.agents if s.role == "alien"]:
                 current_position = self._get_position(spec)
                 opposing_positions = [
