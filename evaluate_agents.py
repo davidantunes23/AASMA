@@ -846,9 +846,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--noise-prob", type=float, default=0.10,
                         help="Probability of emitting noise each step (default: 0.10)")
     parser.add_argument(
-        "--no-show",
+        "--show",
         action="store_true",
-        help="Do not open a matplotlib window",
+        help="Open a matplotlib window for each plot (default: save only)",
     )
     return parser.parse_args()
 
@@ -1009,7 +1009,7 @@ def main() -> None:
                             survival_dir,
                             f"survival_curve_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
                         ),
-                        show_window=not args.no_show,
+                        show_window=args.show,
                     )
                     timeline_dir = plot_output_dir(
                         args.output_dir,
@@ -1026,7 +1026,7 @@ def main() -> None:
                             timeline_dir,
                             f"capture_escape_timeline_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
                         ),
-                        show_window=not args.no_show,
+                        show_window=args.show,
                     )
 
     if any(spec.key == "rule" for spec in selected_aliens):
@@ -1040,7 +1040,7 @@ def main() -> None:
             labels=comparison_labels,
             escaped_counts_by_label=rule_alien_totals,
             output=comparison_output,
-            show_window=not args.no_show,
+            show_window=args.show,
         )
 
         comparison_output = os.path.join(comparison_dir, "episode_steps_boxplot.png")
@@ -1049,7 +1049,7 @@ def main() -> None:
             labels=comparison_labels,
             episode_steps_by_label=rule_alien_episode_steps,
             output=comparison_output,
-            show_window=not args.no_show,
+            show_window=args.show,
         )
 
         comparison_output = os.path.join(comparison_dir, "mission_completion_counts.png")
@@ -1058,7 +1058,7 @@ def main() -> None:
             labels=comparison_labels,
             mission_counts_by_label=rule_alien_mission_totals,
             output=comparison_output,
-            show_window=not args.no_show,
+            show_window=args.show,
         )
 
         comparison_output = os.path.join(comparison_dir, "average_steps_per_mission.png")
@@ -1073,7 +1073,7 @@ def main() -> None:
             title="Average steps per completed mission",
             ylabel="steps / mission",
             output=comparison_output,
-            show_window=not args.no_show,
+            show_window=args.show,
         )
 
 

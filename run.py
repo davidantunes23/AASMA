@@ -67,6 +67,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=str, default="output/simulation.gif", help="Output GIF path")
     parser.add_argument("--no-show", action="store_true", help="Do not open a preview window")
     parser.add_argument("--no-render", action="store_true", help="Skip GIF rendering (useful for debug runs)")
+    parser.add_argument("--debug-log", action="store_true",
+                        help="Write role/mission reassignment debug log to output/logs/")
     parser.add_argument("--human-view", type=int, default=6, help="Human observation radius (default: 6)")
     parser.add_argument("--alien-fov", type=int, default=6, help="Alien FOV radius (default: 6)")
     parser.add_argument("--noise-radius", type=int, default=2, help="Max cell offset for player noise (default: 2)")
@@ -192,6 +194,7 @@ def main():
         noise_radius=args.noise_radius,
         seed=args.seed,
         mission_steps=args.mission_steps,
+        debug_log=args.debug_log,
     )
     simulation.mission_tile_values = {int(Tile.MISSION)}
 
@@ -200,7 +203,8 @@ def main():
         for pos in simulation._mission_positions():
             simulation.add_mission(pos)
 
-    print(f"Role debug log: {simulation.debug_log_path}")
+    if args.debug_log:
+        print(f"Role debug log: {simulation.debug_log_path}")
 
     frames, outcome = simulation.run(max_steps=args.max_steps)
     print(f"Outcome: {outcome}  ({len(frames) - 1} steps)")

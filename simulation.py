@@ -753,8 +753,10 @@ class GenericMapSimulation:
                     except Exception:
                         pass
                 else:
+                    # No mission and not the decoy: stage near the exit ready to
+                    # sprint through as soon as it opens.
                     try:
-                        setattr(agent, "team_role", TeamRole.NONE)
+                        setattr(agent, "team_role", TeamRole.EXPLORER)
                     except Exception:
                         pass
 
@@ -1447,6 +1449,8 @@ class GenericMapSimulation:
             newly_captured = self._captured_human_labels(post_alien_agents, captured_humans)
             if newly_captured:
                 captured_humans.update(newly_captured)
+                self._release_captured_worker_claims(newly_captured)
+                self._maybe_reassign_roles(worker_died=True)
                 # If there are still humans remaining, clear alien pursuit
                 # state so it resumes searching instead of camping.
                 if len(captured_humans) < len(all_human_labels):
