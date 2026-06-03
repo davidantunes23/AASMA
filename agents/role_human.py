@@ -587,7 +587,7 @@ class RoleHumanAgent(BaseHumanAgent):
                 return self.pos
             # Move to farthest-from-missions tile so the alien arrives at empty space.
             far_tile = self._farthest_from_missions()
-            if far_tile is not None:
+            if far_tile is not None and far_tile != self.pos:
                 nxt = self._step_toward_target(far_tile)
                 if nxt is not None and nxt != self.pos:
                     self.direction = self._direction_from_step(self.pos, nxt)
@@ -599,7 +599,12 @@ class RoleHumanAgent(BaseHumanAgent):
         if self._update_decoy_loud_noise(self.last_radar_threat == "FAR" and not self.hidden):
             return self.pos
         far_tile = self._farthest_from_missions()
-        if far_tile is not None and far_tile != self.pos:
+        if far_tile is not None:
+            if far_tile == self.pos:
+                # Already at the optimal decoy position — hold position to avoid
+                # oscillating back toward missions via the fallback explorer.
+                self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                return self.pos
             nxt = self._step_toward_target(far_tile)
             if nxt is not None and nxt != self.pos:
                 self.direction = self._direction_from_step(self.pos, nxt)
