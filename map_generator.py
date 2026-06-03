@@ -379,7 +379,8 @@ class MapGenerator:
         self.exit_pos = (ex, ey)
 
         # Track special tile positions to avoid overwriting them
-        special_tiles = {(px, py), (ax, ay), (ex, ey)}
+        player_starts = [centres[i] for i in range(self.human_count)]
+        special_tiles = {(ax, ay), (ex, ey)} | set(player_starts)
 
         # Vents
         for room in self.rooms:
