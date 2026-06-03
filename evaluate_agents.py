@@ -42,7 +42,7 @@ except ModuleNotFoundError:
 
 MISSION_COUNT = 2
 MISSION_STEPS = 10
-ROLE_TEAM_SIZE = 3
+HUMAN_COUNT = 3
 ALPHA = 0.0
 DEFAULT_OUTPUT_DIR = "output/eval"
 
@@ -99,11 +99,11 @@ class AlienSpec:
 
 
 HUMAN_SPECS = [
-    HumanSpec("random", "random_human", ROLE_TEAM_SIZE, role_based=False, omniscient=False),
-    HumanSpec("rule", "rule_human", ROLE_TEAM_SIZE, role_based=False, omniscient=False),
-    HumanSpec("role", "role_human_3", ROLE_TEAM_SIZE, role_based=True, omniscient=False),
-    HumanSpec("coop", "coop_role_human_3", ROLE_TEAM_SIZE, role_based=True, omniscient=False),
-    HumanSpec("omniscient", "omniscient_human", ROLE_TEAM_SIZE, role_based=True, omniscient=True),
+    HumanSpec("random", "random_human", HUMAN_COUNT, role_based=False, omniscient=False),
+    HumanSpec("rule", "rule_human", HUMAN_COUNT, role_based=False, omniscient=False),
+    HumanSpec("role", "role_human_3", HUMAN_COUNT, role_based=True, omniscient=False),
+    HumanSpec("coop", "coop_role_human_3", HUMAN_COUNT, role_based=True, omniscient=False),
+    HumanSpec("omniscient", "omniscient_human", HUMAN_COUNT, role_based=True, omniscient=True),
 ]
 
 ALIEN_SPECS = [
@@ -111,25 +111,27 @@ ALIEN_SPECS = [
 ]
 
 
-def find_tile(grid: np.ndarray, tile: Tile) -> list[tuple[int, int]]:
-    ys, xs = np.where(grid == int(tile))
-    return [(int(y), int(x)) for y, x in zip(ys, xs)]
+def find_tile(grid: np.ndarray, tile: Tile) -> tuple[int, int]:
+    matches = np.argwhere(grid == int(tile))
+    if len(matches) == 0:
+        raise ValueError(f"Tile {tile.name} not found in map")
+    y, x = matches[0]
+    return int(y), int(x)
 
 
 def choose_human_positions(
     grid: np.ndarray,
-    positions: list[tuple[int, int]],
+    anchor: tuple[int, int],
     count: int,
     avoid: set[tuple[int, int]] | None = None,
 ) -> list[tuple[int, int]]:
     avoid_set = set(avoid or set())
     candidates: list[tuple[int, int]] = []
-    for anchor in positions:
-        if anchor not in avoid_set:
-            candidates.append(anchor)
+    if anchor not in avoid_set:
+        candidates.append(anchor)
 
     floors = [(int(y), int(x)) for y, x in np.argwhere(grid == int(Tile.FLOOR))]
-    floors = [pos for pos in floors if pos not in avoid_set and pos not in positions]
+    floors = [pos for pos in floors if pos not in avoid_set and pos != anchor]
     floors.sort(key=lambda pos: abs(pos[0] - anchor[0]) + abs(pos[1] - anchor[1]))
     candidates.extend(floors)
 
@@ -203,11 +205,11 @@ def build_simulation(
     alien_spec: AlienSpec,
     p_noise: float = 0.10,
 ) -> GenericMapSimulation:
-    human_starts = find_tile(grid, Tile.PLAYER_START)
-    alien_start = find_tile(grid, Tile.ALIEN_START)[0]
+    human_start = find_tile(grid, Tile.PLAYER_START)
+    alien_start = find_tile(grid, Tile.ALIEN_START)
     human_positions = choose_human_positions(
         grid,
-        human_starts,
+        human_start,
         human_spec.count,
         avoid={alien_start},
     )
@@ -434,7 +436,7 @@ def evaluate_matchup(
         if not human_labels and run.frames:
             human_labels = [a.label for a in run.frames[0].agents if a.role == "human"]
         total_steps += metrics.steps
-        escaped_idx = max(0, min(metrics.escaped_count, ROLE_TEAM_SIZE))
+        escaped_idx = max(0, min(metrics.escaped_count, HUMAN_COUNT))
         escaped_counts[escaped_idx] += 1
 
     total = max(len(episode_seeds), 1)
@@ -955,7 +957,7 @@ def main() -> None:
                     else:
                         mission_completion_rate = 0.0
                     alien_captures = sum(ep.captured_count for ep in episodes)
-
+                    
                     table_writer.writerow([
                         width,
                         height,
@@ -1053,6 +1055,37 @@ def main() -> None:
         )
 
         comparison_output = os.path.join(comparison_dir, "mission_completion_counts.png")
+
+        print("\nMission completion statistics:")
+
+        for label in comparison_labels:
+            counts = rule_alien_mission_totals[label]
+
+            total_episodes = sum(counts)
+
+            if total_episodes == 0:
+                continue
+
+            percentages = [
+                100.0 * count / total_episodes
+                for count in counts
+            ]
+
+            values = rule_alien_steps_per_mission.get(label, [])
+
+            avg_steps_per_mission = (
+                np.mean(values)
+                if values
+                else 0.0
+            )
+
+            print(
+                f"{label}: "
+                f"0 missions={percentages[0]:.1f}% "
+                f"1 mission={percentages[1]:.1f}% "
+                f"2 missions={percentages[2]:.1f}% | "
+                f"avg steps/mission={avg_steps_per_mission:.1f}"
+            )
 
         plot_mission_completion_comparison(
             labels=comparison_labels,

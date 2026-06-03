@@ -17,9 +17,9 @@ from map_generator import MapGenerator, Tile
 from simulation import GenericMapSimulation, build_agent_spec
 
 
-def find_tile(grid: np.ndarray, tile: Tile) -> list[tuple[int, int]]:
+def find_tile(grid: np.ndarray, tile: Tile) -> tuple[int, int]:
     ys, xs = np.where(grid == int(tile))
-    return [(int(y), int(x)) for y, x in zip(ys, xs)]
+    return int(ys[0]), int(xs[0])
 
 
 def topology_distance(grid: np.ndarray, start: tuple[int, int], goal: tuple[int, int]) -> int:
@@ -92,25 +92,24 @@ def build_agents(
     alien_count: int = 1,
     alien_class: str = "alien",
 ):
-    human_starts = find_tile(grid, Tile.PLAYER_START)
-    alien_start = find_tile(grid, Tile.ALIEN_START)[0]
+    human_start = find_tile(grid, Tile.PLAYER_START)
+    alien_start = find_tile(grid, Tile.ALIEN_START)
 
     if min_start_distance > 0:
-        for human_start in human_starts:
-            current_distance = topology_distance(grid, human_start, alien_start)
-            if current_distance < min_start_distance:
-                floor_tiles = np.argwhere(grid == int(Tile.FLOOR))
-                floor_candidates = [(int(y), int(x)) for y, x in floor_tiles]
-                floor_candidates.sort(
-                    key=lambda pos: (-topology_distance(grid, human_start, pos), abs(pos[0] - human_start[0]) + abs(pos[1] - human_start[1]))
-                )
-                if floor_candidates:
-                    alien_start = floor_candidates[0]
+        current_distance = topology_distance(grid, human_start, alien_start)
+        if current_distance < min_start_distance:
+            floor_tiles = np.argwhere(grid == int(Tile.FLOOR))
+            floor_candidates = [(int(y), int(x)) for y, x in floor_tiles]
+            floor_candidates.sort(
+                key=lambda pos: (-topology_distance(grid, human_start, pos), abs(pos[0] - human_start[0]) + abs(pos[1] - human_start[1]))
+            )
+            if floor_candidates:
+                alien_start = floor_candidates[0]
 
     specs: list = []
 
     # Helper to create human instances depending on chosen class
-    def make_human_instance(ix: int, human_start: tuple[int, int]):
+    def make_human_instance(ix: int):
         if human_class == "random" or demo == "random":
             from agents.random_human import RandomHumanAgent
             return RandomHumanAgent(pos=human_start, rng=random.Random(seed + ix))
@@ -141,7 +140,7 @@ def build_agents(
 
     # Create requested human agents
     for i in range(human_count):
-        inst = make_human_instance(i, human_starts[i])
+        inst = make_human_instance(i)
         specs.append(build_agent_spec(f"human_{i+1}", "human", inst))
 
     # Create requested alien agents
@@ -164,12 +163,11 @@ def main():
         alpha=args.alpha,
         seed=args.seed,
         mission_count=args.mission_count,
-        human_count=args.human_count,
     )
     grid = generator.generate()
 
     player_start = find_tile(grid, Tile.PLAYER_START)
-    alien_start = find_tile(grid, Tile.ALIEN_START)[0]
+    alien_start = find_tile(grid, Tile.ALIEN_START)
 
     agents = build_agents(
         grid,

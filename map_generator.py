@@ -85,7 +85,6 @@ class MapGenerator:
         max_rooms: int | None = None,
         max_hides_per_room: int | None = None,
         mission_count: int = 0,
-        human_count: int = 1,
     ):
         if not -1.0 <= alpha <= 1.0:
             raise ValueError("alpha must be in [-1, +1]")
@@ -114,8 +113,6 @@ class MapGenerator:
         if mission_count < 0:
             raise ValueError("mission_count must be >= 0")
         self.mission_count = mission_count
-
-        self.human_count = human_count
 
         self.rng = random.Random(self.seed)
         self.np_rng = np.random.default_rng(self.seed)
@@ -361,17 +358,12 @@ class MapGenerator:
         # Place spawns and exit at room centres, maximising distance
         centres = [self._room_centre(r) for r in self.rooms]
 
-        # Player spawns at the first room centres, alien at the last, exit at the middle.
-        # This maximises separation between players and the alien on generation.
-        for i in range(self.human_count):
-            px, py = centres[i]
-            self.grid[py, px] = Tile.PLAYER_START
-
+        px, py = centres[0]
         ax, ay = centres[-1]   # alien: last room (farthest from player start)
         mid = len(centres) // 2
         ex, ey = centres[mid]  # exit: middle room
 
-        px, py = centres[0]
+        self.grid[py, px] = Tile.PLAYER_START
         self.player_pos = (px, py)
         self.grid[ay, ax] = Tile.ALIEN_START
         self.alien_pos = (ax, ay)
