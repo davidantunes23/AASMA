@@ -27,25 +27,17 @@ from agents.base import (
     Direction,
     direction_from_delta,
 )
+from map_generator import Tile
 
-# Tile type identifiers (must match map_generator.Tile enum)
-WALL         = 0
-FLOOR        = 1
-VENT         = 2
-HIDE         = 3
-PLAYER_START = 4
-ALIEN_START  = 5
-EXIT         = 6
-MISSION      = 7
-UNKNOWN      = -1   # cell not yet observed
-PLAYER_SEEN  = -2   # special marker written to knowledge map when a player was spotted here
+UNKNOWN     = -1   # cell not yet observed
+PLAYER_SEEN = -2   # special marker written to knowledge map when a player was spotted here
 
-# Tiles the alien can normally walk on (HIDE is excluded — aliens cannot enter hiding spots).
-PASSABLE_ALIEN      = {FLOOR, VENT, PLAYER_START, ALIEN_START, EXIT, MISSION}
+# Tiles the alien can normally walk on (HIDE excluded — aliens cannot enter hiding spots).
+PASSABLE_ALIEN      = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.PLAYER_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
 # Extended passable set used only when the alien confirmed the player is hiding in a spot.
-PASSABLE_ALIEN_RUSH = {FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT, MISSION}
+PASSABLE_ALIEN_RUSH = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.HIDE), int(Tile.PLAYER_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
 # Tiles a player can walk on (used for vent teleport savings estimation).
-PASSABLE_PLAYER     = {FLOOR, VENT, HIDE, PLAYER_START, ALIEN_START, EXIT, MISSION}
+PASSABLE_PLAYER     = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.HIDE), int(Tile.PLAYER_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
 
 # Cardinal directions as (dy, dx) offsets on a (y, x) grid.
 DIRS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
@@ -127,7 +119,7 @@ class KnowledgeMap:
         for vy, vx in visible_cells:  # (y, x) tuples
             if 0 <= vy < grid_map.shape[0] and 0 <= vx < grid_map.shape[1]:
                 self.knowledge[vy, vx] = int(grid_map[vy, vx])
-                if grid_map[vy, vx] == VENT:
+                if grid_map[vy, vx] == int(Tile.VENT):
                     self.seen_vents.add((vy, vx))
         if player_visible and not player_hiding and player_pos:
             py, px = player_pos  # (y, x)
@@ -258,7 +250,7 @@ class AlienAgent(BaseAlienAgent):
             for pos, _hidden in by_distance:
                 py, px = pos
                 if (py, px) in visible:
-                    if obs[py, px] == HIDE:
+                    if obs[py, px] == int(Tile.HIDE):
                         self._player_hiding = True   # player is inside a hide tile
                     else:
                         self._player_seen = True
@@ -439,7 +431,7 @@ class AlienAgent(BaseAlienAgent):
         this skips the walk-to-entry-vent cost because the alien is already there.
         """
         py, px = self.pos
-        if self.knowledge.knowledge[py, px] != VENT:
+        if self.knowledge.knowledge[py, px] != int(Tile.VENT):
             return None  # not on a vent
         seen_vents = self.knowledge.get_seen_vents()
         if len(seen_vents) < 2:
@@ -539,7 +531,7 @@ class AlienAgent(BaseAlienAgent):
         elif self.last_heard_pos is not None and self.steps_since_heard <= 5:
             # Active sound cue — route toward it, optionally via a vent shortcut.
             py, px         = self.pos
-            current_is_vent = km[py, px] == VENT
+            current_is_vent = km[py, px] == int(Tile.VENT)
             best_sound_vent = self._best_seen_vent_route_for_sound(self.last_heard_pos)
 
             sound_y, sound_x = self.last_heard_pos
@@ -560,7 +552,7 @@ class AlienAgent(BaseAlienAgent):
         elif self.state == AlienState.INVESTIGATE:
             if self.last_known_pos is None:
                 goal = self.pos
-            elif km[self.last_known_pos[0], self.last_known_pos[1]] == HIDE:
+            elif km[self.last_known_pos[0], self.last_known_pos[1]] == int(Tile.HIDE):
                 if self.player_known_hiding:
                     # Confirmed: player was seen entering — rush in through HIDE tiles.
                     return astar(km, self.pos, self.last_known_pos, PASSABLE_ALIEN_RUSH)
