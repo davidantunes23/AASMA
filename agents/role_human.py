@@ -578,8 +578,9 @@ class RoleHumanAgent(BaseHumanAgent):
             return self.pos
 
         # FAR or no threat — preemptively reposition and optionally emit noise.
-        if self._update_decoy_loud_noise(self.last_radar_threat == "FAR" and not self.hidden):
-            return self.pos
+        if self.last_radar_threat == "FAR":
+            if self._update_decoy_loud_noise(not self.hidden):
+                return self.pos
         far_tile = self._farthest_from_missions()
         if far_tile is not None and far_tile != self.pos:
             nxt = self._step_toward_target(far_tile)
@@ -637,8 +638,7 @@ class RoleHumanAgent(BaseHumanAgent):
     def _runner_step(self) -> tuple[int, int]:
         """Stage near the exit and escape as soon as it opens; explore until then."""
         # Determine whether there are still undiscovered missions on the map.
-        # The runner avoids staging at the exit while missions are unknown — it
-        # would just block and wait forever.
+        # The runner avoids staging at the exit while missions are unknown.
         if self.missions_total > 0:
             missing_missions = (
                 not self.exit_open
@@ -652,33 +652,7 @@ class RoleHumanAgent(BaseHumanAgent):
                 and self.missions_remaining > len(self._known_mission_coords)
             )
 
-        # PRIORITY 1: Exit open and known → escape if threat is low enough.
-        if self.exit_open and self._known_exit is not None:
-            if self.last_radar_threat is None or self.last_radar_threat == "FAR":
-                nxt = self._step_toward_target(self._known_exit)
-                if nxt is not None and nxt != self.pos:
-                    self.direction = self._direction_from_step(self.pos, nxt)
-                    self.pos       = nxt
-                    self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                    return self.pos
-                return self.pos  # already at exit or blocked
-            # Threat too high: hide and wait for it to pass.
-            if self.hidden:
-                if self._should_keep_hiding():
-                    return self.pos
-                else:
-                    self.hidden = False
-            spot = self._get_closest_hiding_spot()
-            if spot is not None:
-                nxt = self._step_toward_target(spot)
-                if nxt is not None and nxt != self.pos:
-                    self.direction = self._direction_from_step(self.pos, nxt)
-                    self.pos       = nxt
-                    self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                    return self.pos
-            return self.pos
-
-        # PRIORITY 2: Exit known but locked and all missions accounted for →
+        # PRIORITY 1: Exit known but locked and all missions accounted for →
         # stage in the cell adjacent to the exit ready to sprint through.
         if self._known_exit is not None and not missing_missions:
             if self.last_radar_threat in {"CRITICAL", "CLOSE"}:

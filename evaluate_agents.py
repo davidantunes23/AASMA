@@ -155,7 +155,6 @@ def build_humans(
     if spec.key == "random":
         return [
             RandomHumanAgent(
-                grid=grid.copy(),
                 pos=positions[idx],
                 view_length=view_length,
                 rng=random.Random(seed + 10 + idx),
