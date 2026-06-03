@@ -4,7 +4,7 @@ Each agent is assigned one of three roles by the role manager:
   WORKER  — navigates to uncompleted mission tiles and dwells on them.
   DECOY   — repositions away from missions and emits deliberate noise to draw
              the alien away from workers.
-  RUNNER  — stages near the exit and escapes as soon as it opens; never
+  EXPLORER  — stages near the exit and escapes as soon as it opens; never
              completes missions itself.
 
 All roles share the same survival priority stack (hide when threatened) and
@@ -47,7 +47,7 @@ class RoleHumanAgent(BaseHumanAgent):
         self.agent_id: int = RoleHumanAgent._next_agent_id
         RoleHumanAgent._next_agent_id += 1
 
-        self.team_role: TeamRole | None = TeamRole.RUNNER  # default until role manager assigns
+        self.team_role: TeamRole | None = TeamRole.EXPLORER  # default until role manager assigns
         self.last_radar_threat: str | None = None  # most recent radar band (CRITICAL/CLOSE/NEAR/FAR)
         self.last_radar_dist:   int | None = None  # topology distance to alien at last radar tick
         self._known_map:  np.ndarray | None       = None   # tile map built from cone observations
@@ -77,7 +77,7 @@ class RoleHumanAgent(BaseHumanAgent):
         self._known_mission_coords: set[tuple[int, int]] = set()
 
         # Persistent mission discovery memory — not cleared when a mission completes,
-        # so the runner can tell whether all missions have been found yet.
+        # so the explorer can tell whether all missions have been found yet.
         self._seen_mission_coords: set[tuple[int, int]] = set()
 
         # Outbound coord messages queued during observe(), sent via flush_outbox().
@@ -145,8 +145,8 @@ class RoleHumanAgent(BaseHumanAgent):
         # PRIORITY 4: Delegate to role-specific behaviour.
         if self.team_role == TeamRole.DECOY:
             return self._decoy_step()
-        if self.team_role == TeamRole.RUNNER:
-            return self._runner_step()
+        if self.team_role == TeamRole.EXPLORER:
+            return self._explorer_step()
         if self.team_role == TeamRole.WORKER:
             return self._worker_step()
 
@@ -648,12 +648,12 @@ class RoleHumanAgent(BaseHumanAgent):
                     best       = (y, x)
         return best
 
-    # ── RUNNER helpers ────────────────────────────────────────────────────────
+    # ── EXPLORER helpers ────────────────────────────────────────────────────────
 
-    def _runner_step(self) -> tuple[int, int]:
+    def _explorer_step(self) -> tuple[int, int]:
         """Stage near the exit and escape as soon as it opens; explore until then."""
         # Determine whether there are still undiscovered missions on the map.
-        # The runner avoids staging at the exit while missions are unknown.
+        # The explorer avoids staging at the exit while missions are unknown.
         if self.missions_total > 0:
             missing_missions = (
                 not self.exit_open

@@ -21,7 +21,7 @@ from agents.role_manager import (
     assign_worker_greedy,
     assign_workers_omniscient,
     assign_decoy_farthest,
-    assign_runner_residual,
+    assign_explorer_residual,
     clear_roles,
 )
 from map_generator import Tile
@@ -215,7 +215,7 @@ class GenericMapSimulation:
         # via `set_initial_roles` or `allocate_roles_by_counts`.
         self.role_based: bool = True
         # When True, use omniscient assignment: one worker per mission (no
-        # redundancy) and no RUNNER role. Set this when all agents are
+        # redundancy) and no EXPLORER role. Set this when all agents are
         # OmniscientHumanAgent instances.
         self.omniscient_roles: bool = False
         # Mission tile values to auto-detect (set of integer tile ids).
@@ -664,14 +664,14 @@ class GenericMapSimulation:
         assignable_specs = [s for s in human_specs if getattr(s, "label", "") not in locked]
         current_workers = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.WORKER]
         current_decoys = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.DECOY]
-        current_runners = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.RUNNER]
+        current_explorers = [s for s in human_specs if getattr(s.agent, "team_role", None) == TeamRole.EXPLORER]
 
         self._debug_log(
             "reassign_start: "
             f"trigger={{new_mission={new_mission}, mission_completed={mission_completed}, worker_died={worker_died}, exit_opened={exit_opened}}}, "
             f"known={sorted(self.known_missions)}, pending={sorted(self.pending_missions)}, "
             f"locked={sorted(locked)}, assignable={[s.label for s in assignable_specs]}, "
-            f"workers={[s.label for s in current_workers]}, decoys={[s.label for s in current_decoys]}, runners={[s.label for s in current_runners]}, "
+            f"workers={[s.label for s in current_workers]}, decoys={[s.label for s in current_decoys]}, explorers={[s.label for s in current_explorers]}, "
             f"roles_before={[(s.label, getattr(s.agent, 'team_role', None)) for s in human_specs]}"
         )
 
@@ -691,7 +691,7 @@ class GenericMapSimulation:
 
         # Endgame policy: if all missions are completed and there are no
         # active/known mission anchors left, remove WORKER/DECOY roles.
-        # Everyone still alive should become RUNNER.
+        # Everyone still alive should become EXPLORER.
         all_missions_done = (
             self._missions_remaining() == 0
             and not missions
@@ -699,14 +699,14 @@ class GenericMapSimulation:
             and not pending_missions
         )
         if all_missions_done:
-            self._debug_log("reassign_endgame: all missions completed -> runners only")
+            self._debug_log("reassign_endgame: all missions completed -> explorers only")
             for s in human_specs:
                 agent = getattr(s, "agent", None)
                 if agent is None:
                     continue
                 self._clear_agent_current_mission(s)
                 try:
-                    setattr(agent, "team_role", TeamRole.RUNNER)
+                    setattr(agent, "team_role", TeamRole.EXPLORER)
                 except Exception:
                     pass
             self._debug_log(
@@ -719,7 +719,7 @@ class GenericMapSimulation:
             self._debug_log("reassign_skip: no_missions_to_assign")
             return
 
-        # Omniscient path: one worker per mission (no redundancy), no runner.
+        # Omniscient path: one worker per mission (no redundancy), no explorer.
         if self.omniscient_roles:
             all_missions = list(self.known_missions)
             for spec in assignable_specs:
@@ -850,9 +850,9 @@ class GenericMapSimulation:
         self._debug_log(f"assign_decoy: chosen={decoy_label}, any_worker={any_worker_assigned}")
         remaining_specs = [s for s in remaining_specs if getattr(s, "label", None) != decoy_label]
 
-        # All remaining agents become RUNNER — there can be more than one.
-        runner_labels = {getattr(s, "label", None) for s in remaining_specs}
-        self._debug_log(f"assign_runners: chosen={sorted(runner_labels)}")
+        # All remaining agents become EXPLORER — there can be more than one.
+        explorer_labels = {getattr(s, "label", None) for s in remaining_specs}
+        self._debug_log(f"assign_explorers: chosen={sorted(explorer_labels)}")
 
         # Commit role assignments for non-locked humans
         for s in human_specs:
@@ -874,9 +874,9 @@ class GenericMapSimulation:
                 except Exception:
                     pass
                 continue
-            if label in runner_labels:
+            if label in explorer_labels:
                 try:
-                    setattr(agent, "team_role", TeamRole.RUNNER)
+                    setattr(agent, "team_role", TeamRole.EXPLORER)
                 except Exception:
                     pass
                 continue
@@ -897,7 +897,7 @@ class GenericMapSimulation:
     def set_initial_roles(self, role_map: dict[str, str | TeamRole]) -> None:
         """Set explicit roles for agents by label.
 
-        `role_map` maps agent label -> role name (e.g. 'WORKER', 'DECOY', 'RUNNER')
+        `role_map` maps agent label -> role name (e.g. 'WORKER', 'DECOY', 'EXPLORER')
         or a `TeamRole` value. Only human agents are affected.
         """
         for spec in self.agents:
@@ -919,7 +919,7 @@ class GenericMapSimulation:
     def allocate_roles_by_counts(self, counts: dict[str, int]) -> None:
         """Allocate roles among human agents by counts.
 
-        `counts` keys can be 'WORKER', 'DECOY', 'RUNNER' (case-sensitive).
+        `counts` keys can be 'WORKER', 'DECOY', 'EXPLORER' (case-sensitive).
         Assignment is greedy: it assigns roles to available human agents in
         the order they appear in `self.agents` until counts are satisfied.
         This is a deterministic, user-controlled allocation useful for
@@ -957,11 +957,11 @@ class GenericMapSimulation:
                 break
             remaining = [s for s in remaining if getattr(s, "label", None) != chosen_label]
 
-        # assign RUNNERs (residual — first available leftover agent)
-        for _ in range(counts.get("RUNNER", 0)):
+        # assign EXPLORERs (residual — first available leftover agent)
+        for _ in range(counts.get("EXPLORER", 0)):
             if not remaining:
                 break
-            chosen_label = assign_runner_residual(remaining)
+            chosen_label = assign_explorer_residual(remaining)
             if not chosen_label:
                 break
             remaining = [s for s in remaining if getattr(s, "label", None) != chosen_label]
@@ -2120,7 +2120,7 @@ class GenericMapSimulation:
             role_markers = {
                 TeamRole.WORKER: "o",
                 TeamRole.DECOY: "D",
-                TeamRole.RUNNER: "^",
+                TeamRole.EXPLORER: "^",
                 TeamRole.NONE: GenericMapSimulation.HUMAN_MARKERS[index % len(GenericMapSimulation.HUMAN_MARKERS)],
             }
             return role_markers.get(agent.team_role, GenericMapSimulation.HUMAN_MARKERS[index % len(GenericMapSimulation.HUMAN_MARKERS)])
@@ -2129,7 +2129,7 @@ class GenericMapSimulation:
 
     @staticmethod
     def _role_legend_text() -> str:
-        return "ROLE ICONS\nWORKER: o\nDECOY: D\nRUNNER: ^"
+        return "ROLE ICONS\nWORKER: o\nDECOY: D\nEXPLORER: ^"
 
     @staticmethod
     def _format_shared_coords(state: SimulationFrame) -> str:

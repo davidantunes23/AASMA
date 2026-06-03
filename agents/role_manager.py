@@ -9,7 +9,7 @@ Assignment strategy:
   WORKER  — agent closest (Manhattan) to any uncompleted mission.
   DECOY   — agent farthest (Manhattan) from all missions, so it draws the
              alien away from the work area.
-  RUNNER  — residual agent left after Worker and Decoy are assigned.
+  EXPLORER  — residual agent left after Worker and Decoy are assigned.
 """
 from __future__ import annotations
 
@@ -154,14 +154,14 @@ def assign_workers_omniscient(
     return pairs
 
 
-# ── Runner assignment ─────────────────────────────────────────────────────────
+# ── Explorer assignment ─────────────────────────────────────────────────────────
 
 
-def assign_runner_residual(agent_specs: Sequence[object]) -> str | None:
-    """Return the label of the first available human agent as the RUNNER.
+def assign_explorer_residual(agent_specs: Sequence[object]) -> str | None:
+    """Return the label of the first available human agent as the EXPLORER.
 
     Called after WORKER and DECOY are assigned — whoever is left becomes
-    the Runner. Ignores position; role geometry is handled by the agent itself.
+    the Explorer. Ignores position; role geometry is handled by the agent itself.
     """
     human_specs = [s for s in agent_specs if getattr(s, "role", None) == "human"]
     if not human_specs:
