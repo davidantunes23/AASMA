@@ -395,6 +395,7 @@ def evaluate_matchup(
     human_spec: HumanSpec,
     alien_spec: AlienSpec,
     p_noise: float = 0.10,
+    stop_on_timeout: bool = False,
 ) -> MatchupMetrics:
     escaped_counts = [0, 0, 0, 0]
     total_steps = 0
@@ -424,6 +425,11 @@ def evaluate_matchup(
             alien_spec=alien_spec,
             p_noise=p_noise,
         )
+        if stop_on_timeout and run.outcome == "max_steps_reached":
+            print(f"\n[STOP] max_steps reached: seed={episode_seed}, map={width}x{height}, human={human_spec.key}")
+            print(f"python run.py --human-class {human_spec.key} --human-count {human_spec.count} --seed {episode_seed} --width {width} --height {height} --max-steps {max_steps} --no-show")
+            sys.exit(0)
+
         metrics = extract_episode_metrics(
             seed=episode_seed,
             run=run,
@@ -845,6 +851,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--noise-prob", type=float, default=0.10,
                         help="Probability of emitting noise each step (default: 0.10)")
+    parser.add_argument("--stop-on-timeout", action="store_true",
+                        help="Print seed and exit on first max-steps episode")
     parser.add_argument(
         "--show",
         action="store_true",
@@ -920,6 +928,7 @@ def main() -> None:
                         human_spec=human_spec,
                         alien_spec=alien_spec,
                         p_noise=args.noise_prob,
+                        stop_on_timeout=args.stop_on_timeout,
                     )
                     stats = matchup.escape_stats
                     episodes = matchup.episodes

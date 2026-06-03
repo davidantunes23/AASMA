@@ -59,8 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--style", choices=["full", "world"], default="full",
                         help="'full' = world + knowledge panels, 'world' = world only (default: full)")
     parser.add_argument("--seed", type=int, default=42, help="Map and agent seed (default: 42)")
-    parser.add_argument("--width", type=int, default=50, help="Map width (default: 50)")
-    parser.add_argument("--height", type=int, default=35, help="Map height (default: 35)")
+    parser.add_argument("--width", type=int, default=60, help="Map width (default: 50)")
+    parser.add_argument("--height", type=int, default=40, help="Map height (default: 35)")
     parser.add_argument("--alpha", type=float, default=0.0, help="Map alpha in [-1, 1] (default: 0.0)")
     parser.add_argument("--max-steps", type=int, default=300, help="Maximum simulation steps (default: 300)")
     parser.add_argument("--fps", type=int, default=12, help="Animation FPS (default: 12)")
@@ -121,16 +121,16 @@ def build_agents(
             from agents.base import Direction
             return RoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
         if human_class == "coop":
-            from agents.coop_role_human import CoopRoleHumanAgent
             from agents.base import Direction
+            from agents.coop_role_human import CoopRoleHumanAgent
             return CoopRoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
         if human_class == "omniscient":
-            from agents.omniscient_human import OmniscientHumanAgent
             from agents.base import Direction
+            from agents.omniscient_human import OmniscientHumanAgent
             return OmniscientHumanAgent(grid=grid.copy(), start_pos=human_start, start_dir=Direction.NORTH)
         # default: rule-based HumanAgent
-        from agents.rule_human import HumanAgent
         from agents.base import Direction
+        from agents.rule_human import HumanAgent
         return HumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
 
     # Helper to create alien instances depending on chosen class
