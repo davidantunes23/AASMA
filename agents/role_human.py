@@ -115,7 +115,11 @@ class RoleHumanAgent(BaseHumanAgent):
                 return self.pos
 
         # PRIORITY 2: Hide when threatened (shared survival logic, overrides all roles).
+        # Silence the decoy noise burst before hiding so the alien isn't baited
+        # toward cover the decoy is about to enter.
         if self._should_hide_now():
+            if self.team_role == TeamRole.DECOY:
+                self._update_decoy_loud_noise(False)
             spot = self._get_closest_hiding_spot()
             if spot is not None:
                 nxt = self._step_toward_target(spot)
@@ -554,36 +558,9 @@ class RoleHumanAgent(BaseHumanAgent):
         return started_now
 
     def _decoy_step(self) -> tuple[int, int]:
-        # CRITICAL: alien is adjacent — pure survival, no noise.
-        # Noise here only confirms a position the alien already knows; flee instead.
-        if self.last_radar_threat == "CRITICAL":
-            self._update_decoy_loud_noise(False)
-            if self.hidden:
-                return self.pos
-            spot = self._get_closest_hiding_spot()
-            if spot is not None:
-                nxt = self._step_toward_target(spot)
-                if nxt is not None and nxt != self.pos:
-                    self.direction = self._direction_from_step(self.pos, nxt)
-                    self.pos       = nxt
-                    self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                    return self.pos
-            return self.pos
-
-        # CLOSE: too dangerous to bait — reach cover silently.
-        if self.last_radar_threat == "CLOSE":
-            self._update_decoy_loud_noise(False)
-            if self.hidden:
-                return self.pos  # already in cover — wait it out
-            spot = self._get_closest_hiding_spot()
-            if spot is not None:
-                nxt = self._step_toward_target(spot)
-                if nxt is not None and nxt != self.pos:
-                    self.direction = self._direction_from_step(self.pos, nxt)
-                    self.pos       = nxt
-                    self.hidden    = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                    return self.pos
-            return self.pos
+        # CRITICAL and CLOSE are handled by PRIORITY 2 in step() — noise is
+        # silenced there before seeking cover. _decoy_step() is only reached
+        # when the threat is NEAR, FAR, or None.
 
         # NEAR: optimal bait window — alien is close enough to hear and be drawn
         # away from missions but far enough that the decoy can reposition first.
