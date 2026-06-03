@@ -192,6 +192,7 @@ class GenericMapSimulation:
         seed: int = 0,
         mission_steps: int | None = 3,
         mission_manager: MissionManager | None = None,
+        debug_log: bool = False,
     ):
         self.grid = grid
         self.agents = list(agents)
@@ -253,11 +254,14 @@ class GenericMapSimulation:
         self.mission_steps_required: int = max(20, int(mission_steps) if mission_steps is not None else 20)
         self._mission_dwell_progress: dict[tuple[int, int], int] = {}
 
-        # Debug log for role/mission reassignment decisions.
-        _log_dir = Path(__file__).resolve().parent / "output" / "logs"
-        _log_dir.mkdir(parents=True, exist_ok=True)
-        self.debug_log_path = _log_dir / f"aasma_role_debug_{os.getpid()}_{uuid4().hex}.log"
-        self.debug_log_path.write_text("", encoding="utf-8")
+        # Debug log for role/mission reassignment decisions (opt-in via debug_log=True).
+        if debug_log:
+            _log_dir = Path(__file__).resolve().parent / "output" / "logs"
+            _log_dir.mkdir(parents=True, exist_ok=True)
+            self.debug_log_path: Path | None = _log_dir / f"aasma_role_debug_{os.getpid()}_{uuid4().hex}.log"
+            self.debug_log_path.write_text("", encoding="utf-8")
+        else:
+            self.debug_log_path = None
         self._debug_log(f"init: role_based={self.role_based}, knowledge_mode={self.knowledge_mode}, debug_log={self.debug_log_path}")
         self._debug_log(f"mission_steps_required={self.mission_steps_required}")
 
@@ -309,6 +313,8 @@ class GenericMapSimulation:
             self._shared_belief_map = sbm
 
     def _debug_log(self, message: str) -> None:
+        if self.debug_log_path is None:
+            return
         try:
             with self.debug_log_path.open("a", encoding="utf-8") as handle:
                 handle.write(message.rstrip() + "\n")

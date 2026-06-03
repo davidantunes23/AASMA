@@ -16,30 +16,28 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 try:
-    from agents.rule_alien import AlienAgent
-    from agents.rule_human import HumanAgent
-    from agents.random_alien import RandomAlienAgent
-    from agents.random_human import RandomHumanAgent
-    from agents.role_human import RoleHumanAgent
+    from agents.base import Direction
     from agents.coop_role_human import CoopRoleHumanAgent
     from agents.omniscient_human import OmniscientHumanAgent
-    from agents.base import Direction
-    from simulation import GenericMapSimulation, build_agent_spec, RADAR_BANDS, SimulationFrame
+    from agents.random_human import RandomHumanAgent
+    from agents.role_human import RoleHumanAgent
+    from agents.rule_alien import AlienAgent
+    from agents.rule_human import HumanAgent
     from map_generator import MapGenerator, Tile
+    from simulation import GenericMapSimulation, SimulationFrame, build_agent_spec
 except ModuleNotFoundError:
     project_root = Path(__file__).resolve().parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
-    from agents.rule_alien import AlienAgent
-    from agents.rule_human import HumanAgent
-    from agents.random_alien import RandomAlienAgent
-    from agents.random_human import RandomHumanAgent
-    from agents.role_human import RoleHumanAgent
+    from agents.base import Direction
     from agents.coop_role_human import CoopRoleHumanAgent
     from agents.omniscient_human import OmniscientHumanAgent
-    from agents.base import Direction
-    from simulation import GenericMapSimulation, build_agent_spec, RADAR_BANDS, SimulationFrame
+    from agents.random_human import RandomHumanAgent
+    from agents.role_human import RoleHumanAgent
+    from agents.rule_alien import AlienAgent
+    from agents.rule_human import HumanAgent
     from map_generator import MapGenerator, Tile
+    from simulation import GenericMapSimulation, SimulationFrame, build_agent_spec
 
 
 MISSION_COUNT = 2
@@ -83,18 +81,6 @@ class MatchupMetrics:
     escape_stats: EscapeStats
     episodes: list[EpisodeMetrics]
     human_labels: list[str]
-    threat_counts_by_step: dict[str, np.ndarray]
-    threat_total_by_step: np.ndarray
-
-
-OUTCOME_LABELS = {
-    "full_escape": "Full escape",
-    "partial_escape": "Partial escape",
-    "full_capture": "Full capture",
-    "timeout": "Timeout",
-}
-
-OUTCOME_ORDER = ["full_escape", "partial_escape", "full_capture", "timeout"]
 
 
 @dataclass(frozen=True)
@@ -121,7 +107,6 @@ HUMAN_SPECS = [
 ]
 
 ALIEN_SPECS = [
-    AlienSpec("random", "random_alien"),
     AlienSpec("rule", "rule_alien"),
 ]
 
@@ -206,12 +191,6 @@ def build_alien(
     seed: int,
     view_length: int,
 ) -> object:
-    if spec.key == "random":
-        return RandomAlienAgent(
-            pos=start_pos,
-            view_length=view_length,
-            rng=random.Random(seed + 100),
-        )
     if spec.key == "rule":
         return AlienAgent(start_pos=start_pos, view_length=view_length)
     raise ValueError(f"Unknown alien model key: {spec.key}")
@@ -330,13 +309,6 @@ def classify_outcome_type(
     return "timeout"
 
 
-def threat_band_for_distance(dist: int) -> str:
-    for threat_level, (min_d, max_d) in RADAR_BANDS.items():
-        if min_d <= dist <= max_d:
-            return threat_level
-    return "FAR"
-
-
 def extract_episode_metrics(
     seed: int,
     run: EpisodeRun,
@@ -414,33 +386,6 @@ def extract_episode_metrics(
     )
 
 
-def accumulate_threat_profile(
-    frames: list[SimulationFrame],
-    max_steps: int,
-    threat_counts_by_step: dict[str, np.ndarray],
-    threat_total_by_step: np.ndarray,
-) -> None:
-    for frame in frames:
-        step = min(int(frame.step), max_steps)
-        alien_positions = [a.position for a in frame.agents if a.role == "alien"]
-        if not alien_positions:
-            continue
-        captured = set(frame.captured_humans or [])
-        escaped = set(frame.escaped_humans or [])
-        for agent in frame.agents:
-            if agent.role != "human":
-                continue
-            if agent.label in captured or agent.label in escaped:
-                continue
-            dist = min(
-                abs(agent.position[0] - alien_pos[0]) + abs(agent.position[1] - alien_pos[1])
-                for alien_pos in alien_positions
-            )
-            band = threat_band_for_distance(dist)
-            threat_counts_by_step[band][step] += 1
-            threat_total_by_step[step] += 1
-
-
 def evaluate_matchup(
     episode_seeds: list[int],
     width: int,
@@ -455,11 +400,6 @@ def evaluate_matchup(
     escaped_counts = [0, 0, 0, 0]
     total_steps = 0
     episodes: list[EpisodeMetrics] = []
-    threat_counts_by_step = {
-        threat: np.zeros(max_steps + 1, dtype=float)
-        for threat in RADAR_BANDS
-    }
-    threat_total_by_step = np.zeros(max_steps + 1, dtype=float)
     human_labels: list[str] = []
     total_humans = human_spec.count
 
@@ -497,12 +437,6 @@ def evaluate_matchup(
         total_steps += metrics.steps
         escaped_idx = max(0, min(metrics.escaped_count, ROLE_TEAM_SIZE))
         escaped_counts[escaped_idx] += 1
-        accumulate_threat_profile(
-            run.frames,
-            max_steps,
-            threat_counts_by_step,
-            threat_total_by_step,
-        )
 
     total = max(len(episode_seeds), 1)
     escaped_percentages = [count / total * 100.0 for count in escaped_counts]
@@ -514,8 +448,6 @@ def evaluate_matchup(
         ),
         episodes=episodes,
         human_labels=human_labels,
-        threat_counts_by_step=threat_counts_by_step,
-        threat_total_by_step=threat_total_by_step,
     )
 
 
@@ -523,57 +455,6 @@ def build_episode_seeds(base_seed: int, width: int, height: int, episodes: int) 
     mix_seed = base_seed ^ (width << 16) ^ height
     rng = np.random.default_rng(mix_seed)
     return [int(rng.integers(0, 2**31 - 1)) for _ in range(episodes)]
-
-
-def plot_escape_counts(
-    escaped_counts: list[int],
-    escaped_percentages: list[float],
-    title: str,
-    output: str,
-    show_window: bool,
-):
-    fig, ax = plt.subplots(figsize=(7.6, 4.6))
-    x = np.arange(len(escaped_counts))
-    bars = ax.bar(x, escaped_counts, color="#2E86C1")
-    ax.set_title(title)
-    ax.set_xlabel("humans escaped")
-    ax.set_ylabel("episode count")
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(i) for i in range(len(escaped_counts))])
-    ax.grid(True, axis="y", alpha=0.25)
-
-    for bar, pct in zip(bars, escaped_percentages):
-        height = bar.get_height()
-        if height == 0:
-            y = 0.05
-            va = "bottom"
-        else:
-            y = height + max(0.05, height * 0.02)
-            va = "bottom"
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            y,
-            f"{pct:.1f}%",
-            ha="center",
-            va=va,
-            fontsize=9,
-        )
-
-    if output:
-        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-        fig.savefig(output, dpi=160, bbox_inches="tight")
-        print(f"Saved plot -> {output}")
-
-    if show_window:
-        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        backend = matplotlib.get_backend().lower()
-        if not has_display or backend == "agg":
-            plt.close(fig)
-            return
-        plt.show()
-        return
-
-    plt.close(fig)
 
 
 def plot_rule_alien_comparison(
@@ -597,109 +478,6 @@ def plot_rule_alien_comparison(
     ax.set_xticklabels(labels, rotation=20, ha="right")
     ax.grid(True, axis="y", alpha=0.25)
     ax.legend(loc="upper right")
-
-    if output:
-        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-        fig.savefig(output, dpi=160, bbox_inches="tight")
-        print(f"Saved plot -> {output}")
-
-    if show_window:
-        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        backend = matplotlib.get_backend().lower()
-        if not has_display or backend == "agg":
-            plt.close(fig)
-            return
-        plt.show()
-        return
-
-    plt.close(fig)
-
-
-def plot_outcome_distribution(
-    episodes: list[EpisodeMetrics],
-    total_humans: int,
-    title: str,
-    output: str,
-    show_window: bool,
-):
-    if not episodes:
-        return
-    zero_capture = sum(
-        1 for ep in episodes
-        if ep.escaped_count == 0 and ep.outcome_type == "full_capture"
-    )
-    zero_timeout = sum(
-        1 for ep in episodes
-        if ep.escaped_count == 0 and ep.outcome_type == "timeout"
-    )
-    counts_by_escape = [0] * (total_humans + 1)
-    for ep in episodes:
-        if 0 <= ep.escaped_count <= total_humans:
-            counts_by_escape[ep.escaped_count] += 1
-
-    segments = [
-        (zero_capture, "0 escaped (capture)", "#c0392b"),
-        (zero_timeout, "0 escaped (timeout)", "#7f8c8d"),
-    ]
-    for escaped in range(1, total_humans + 1):
-        color = ["#f39c12", "#27ae60", "#2980b9"][escaped - 1]
-        segments.append((counts_by_escape[escaped], f"{escaped} escaped", color))
-
-    fig, ax = plt.subplots(figsize=(7.4, 3.8))
-    left = 0
-    for value, label, color in segments:
-        if value <= 0:
-            continue
-        ax.barh([0], [value], left=left, color=color, label=label)
-        left += value
-    ax.set_title(title)
-    ax.set_xlabel("episode count")
-    ax.set_yticks([0])
-    ax.set_yticklabels(["episodes"])
-    ax.grid(True, axis="x", alpha=0.25)
-    ax.legend(loc="upper right", fontsize=8, ncol=2)
-
-    if output:
-        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-        fig.savefig(output, dpi=160, bbox_inches="tight")
-        print(f"Saved plot -> {output}")
-
-    if show_window:
-        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        backend = matplotlib.get_backend().lower()
-        if not has_display or backend == "agg":
-            plt.close(fig)
-            return
-        plt.show()
-        return
-
-    plt.close(fig)
-
-
-def plot_time_to_outcome(
-    episodes: list[EpisodeMetrics],
-    title: str,
-    output: str,
-    show_window: bool,
-):
-    data = []
-    labels = []
-    for outcome_key in OUTCOME_ORDER:
-        values = [ep.steps for ep in episodes if ep.outcome_type == outcome_key]
-        if values:
-            data.append(values)
-            labels.append(OUTCOME_LABELS[outcome_key])
-
-    if not data:
-        return
-
-    fig, ax = plt.subplots(figsize=(8.0, 4.6))
-    ax.violinplot(data, showmeans=True, showextrema=True)
-    ax.set_title(title)
-    ax.set_ylabel("steps")
-    ax.set_xticks(range(1, len(labels) + 1))
-    ax.set_xticklabels(labels, rotation=15, ha="right")
-    ax.grid(True, axis="y", alpha=0.25)
 
     if output:
         os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
@@ -815,135 +593,6 @@ def plot_capture_escape_timeline(
     plt.close(fig)
 
 
-def plot_seed_heatmap(
-    values: np.ndarray,
-    map_sizes: list[tuple[int, int]],
-    title: str,
-    output: str,
-    show_window: bool,
-):
-    if values.size == 0:
-        return
-    fig, ax = plt.subplots(figsize=(8.6, 4.8))
-    im = ax.imshow(values, aspect="auto", cmap="viridis", vmin=0.0, vmax=1.0)
-    ax.set_title(title)
-    ax.set_xlabel("map size")
-    ax.set_ylabel("seed index")
-    ax.set_xticks(range(len(map_sizes)))
-    ax.set_xticklabels([f"{w}x{h}" for w, h in map_sizes], rotation=20, ha="right")
-    tick_step = max(1, values.shape[0] // 10)
-    yticks = list(range(0, values.shape[0], tick_step))
-    ax.set_yticks(yticks)
-    ax.set_yticklabels([str(y) for y in yticks])
-    fig.colorbar(im, ax=ax, label="escape rate")
-
-    if output:
-        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-        fig.savefig(output, dpi=160, bbox_inches="tight")
-        print(f"Saved plot -> {output}")
-
-    if show_window:
-        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        backend = matplotlib.get_backend().lower()
-        if not has_display or backend == "agg":
-            plt.close(fig)
-            return
-        plt.show()
-        return
-
-    plt.close(fig)
-
-
-def plot_mission_progress(
-    episodes: list[EpisodeMetrics],
-    max_steps: int,
-    title: str,
-    output: str,
-    show_window: bool,
-):
-    if not episodes:
-        return
-    max_episode_step = max((ep.steps for ep in episodes), default=0)
-    max_step = min(max_steps, max_episode_step)
-    fig, ax = plt.subplots(figsize=(8.2, 4.6))
-    x = np.arange(max_step + 1)
-    for ep in episodes:
-        y = np.array(ep.mission_counts[: max_step + 1], dtype=float)
-        ax.plot(x, y, color="#8e44ad", alpha=0.25, linewidth=1.0)
-    ax.set_title(title)
-    ax.set_xlabel("step")
-    ax.set_ylabel("missions completed")
-    ax.set_ylim(0, max(MISSION_COUNT, 1))
-    ax.grid(True, axis="y", alpha=0.25)
-
-    if output:
-        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-        fig.savefig(output, dpi=160, bbox_inches="tight")
-        print(f"Saved plot -> {output}")
-
-    if show_window:
-        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        backend = matplotlib.get_backend().lower()
-        if not has_display or backend == "agg":
-            plt.close(fig)
-            return
-        plt.show()
-        return
-
-    plt.close(fig)
-
-
-def plot_radar_threat_profile(
-    threat_counts_by_step: dict[str, np.ndarray],
-    threat_total_by_step: np.ndarray,
-    max_steps: int,
-    title: str,
-    output: str,
-    show_window: bool,
-):
-    if threat_total_by_step.size == 0:
-        return
-    if np.any(threat_total_by_step):
-        max_episode_step = int(np.max(np.nonzero(threat_total_by_step)[0]))
-    else:
-        max_episode_step = 0
-    max_step = min(max_steps, max_episode_step)
-    safe_total = np.where(threat_total_by_step == 0, 1.0, threat_total_by_step)[: max_step + 1]
-    fig, ax = plt.subplots(figsize=(8.4, 4.6))
-    x = np.arange(max_step + 1)
-    colors = {
-        "CRITICAL": "#c0392b",
-        "CLOSE": "#f39c12",
-        "NEAR": "#f1c40f",
-        "FAR": "#27ae60",
-    }
-    for threat_level in RADAR_BANDS:
-        values = threat_counts_by_step[threat_level][: max_step + 1] / safe_total
-        ax.step(x, values, where="post", label=threat_level, color=colors.get(threat_level))
-    ax.set_title(title)
-    ax.set_xlabel("step")
-    ax.set_ylabel("share of humans")
-    ax.set_ylim(0, 1.0)
-    ax.grid(True, axis="y", alpha=0.25)
-    ax.legend(loc="upper right", fontsize=8)
-
-    if output:
-        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
-        fig.savefig(output, dpi=160, bbox_inches="tight")
-        print(f"Saved plot -> {output}")
-
-    if show_window:
-        has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-        backend = matplotlib.get_backend().lower()
-        if not has_display or backend == "agg":
-            plt.close(fig)
-            return
-        plt.show()
-        return
-
-    plt.close(fig)
-
-
 def parse_map_sizes(raw_values: list[str], fallback: tuple[int, int]) -> list[tuple[int, int]]:
     if not raw_values:
         return [fallback]
@@ -1029,7 +678,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--aliens",
         nargs="+",
-        choices=["random", "rule", "all"],
+        choices=["rule", "all"],
         default=["all"],
         help="Which alien model(s) to evaluate (space-separated)",
     )
@@ -1061,7 +710,7 @@ def main() -> None:
         for spec in HUMAN_SPECS
     }
 
-    print(f"Evaluating human vs alien pairings")
+    print("Evaluating human vs alien pairings")
     for human_spec in selected_humans:
         for alien_spec in selected_aliens:
             pair_name = f"{human_spec.label} vs {alien_spec.label}"
@@ -1080,8 +729,6 @@ def main() -> None:
                 table_writer = csv.writer(table_handle)
                 write_summary_header(writer)
                 write_summary_table_header(table_writer)
-
-                heatmap_columns: list[list[float]] = []
 
                 for width, height in map_sizes:
                     episode_seeds = build_episode_seeds(args.seed, width, height, args.episodes)
@@ -1153,56 +800,6 @@ def main() -> None:
                             totals[idx] += stats.escaped_counts[idx]
 
                     title = f"{pair_name} (map {width}x{height}, alpha={ALPHA:+.1f})"
-                    escape_counts_dir = plot_output_dir(
-                        args.output_dir,
-                        "escape_counts",
-                        human_spec.label,
-                        alien_spec.label,
-                    )
-                    os.makedirs(escape_counts_dir, exist_ok=True)
-                    plot_escape_counts(
-                        escaped_counts=stats.escaped_counts,
-                        escaped_percentages=stats.escaped_percentages,
-                        title=title,
-                        output=os.path.join(
-                            escape_counts_dir,
-                            f"escaped_counts_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
-                        ),
-                        show_window=not args.no_show,
-                    )
-                    outcome_dir = plot_output_dir(
-                        args.output_dir,
-                        "outcome_distribution",
-                        human_spec.label,
-                        alien_spec.label,
-                    )
-                    os.makedirs(outcome_dir, exist_ok=True)
-                    plot_outcome_distribution(
-                        episodes=episodes,
-                        total_humans=human_spec.count,
-                        title=f"Outcome distribution - {title}",
-                        output=os.path.join(
-                            outcome_dir,
-                            f"outcome_distribution_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
-                        ),
-                        show_window=not args.no_show,
-                    )
-                    time_dir = plot_output_dir(
-                        args.output_dir,
-                        "time_to_outcome",
-                        human_spec.label,
-                        alien_spec.label,
-                    )
-                    os.makedirs(time_dir, exist_ok=True)
-                    plot_time_to_outcome(
-                        episodes=episodes,
-                        title=f"Time to outcome - {title}",
-                        output=os.path.join(
-                            time_dir,
-                            f"time_to_outcome_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
-                        ),
-                        show_window=not args.no_show,
-                    )
                     survival_dir = plot_output_dir(
                         args.output_dir,
                         "survival_curve",
@@ -1235,65 +832,6 @@ def main() -> None:
                         output=os.path.join(
                             timeline_dir,
                             f"capture_escape_timeline_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
-                        ),
-                        show_window=not args.no_show,
-                    )
-                    mission_dir = plot_output_dir(
-                        args.output_dir,
-                        "mission_progress",
-                        human_spec.label,
-                        alien_spec.label,
-                    )
-                    os.makedirs(mission_dir, exist_ok=True)
-                    plot_mission_progress(
-                        episodes=episodes,
-                        max_steps=args.max_steps,
-                        title=f"Mission progress - {title}",
-                        output=os.path.join(
-                            mission_dir,
-                            f"mission_progress_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
-                        ),
-                        show_window=not args.no_show,
-                    )
-                    radar_dir = plot_output_dir(
-                        args.output_dir,
-                        "radar_threat_profile",
-                        human_spec.label,
-                        alien_spec.label,
-                    )
-                    os.makedirs(radar_dir, exist_ok=True)
-                    plot_radar_threat_profile(
-                        threat_counts_by_step=matchup.threat_counts_by_step,
-                        threat_total_by_step=matchup.threat_total_by_step,
-                        max_steps=args.max_steps,
-                        title=f"Radar threat profile - {title}",
-                        output=os.path.join(
-                            radar_dir,
-                            f"radar_threat_profile_{human_spec.label}_vs_{alien_spec.label}_{width}x{height}.png",
-                        ),
-                        show_window=not args.no_show,
-                    )
-
-                    heatmap_columns.append([
-                        ep.escaped_count / max(human_spec.count, 1) for ep in episodes
-                    ])
-
-                if heatmap_columns:
-                    heatmap_values = np.array(heatmap_columns, dtype=float).T
-                    heatmap_dir = plot_output_dir(
-                        args.output_dir,
-                        "escape_rate_heatmap",
-                        human_spec.label,
-                        alien_spec.label,
-                    )
-                    os.makedirs(heatmap_dir, exist_ok=True)
-                    plot_seed_heatmap(
-                        values=heatmap_values,
-                        map_sizes=map_sizes,
-                        title=f"Escape rate heatmap - {pair_name} (alpha={ALPHA:+.1f})",
-                        output=os.path.join(
-                            heatmap_dir,
-                            f"escape_rate_heatmap_{human_spec.label}_vs_{alien_spec.label}.png",
                         ),
                         show_window=not args.no_show,
                     )
