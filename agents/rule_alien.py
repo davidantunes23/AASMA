@@ -211,6 +211,8 @@ class AlienAgent(BaseAlienAgent):
         self.replan_every = replan_every  # steps between A* replans (HUNT always replans)
         self.reset()
 
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
     def reset(self, start_pos=None):
         self.pos               = start_pos or self.start_pos
         self.direction         = Direction.SOUTH
@@ -231,6 +233,8 @@ class AlienAgent(BaseAlienAgent):
         self._player_seen      = False
         self._player_hiding    = False
         self._player_pos       = None
+
+    # ── Observation ───────────────────────────────────────────────────────────
 
     def observe(self, obs: np.ndarray, opponent_positions=None) -> None:
         """Ingest cone observation and update knowledge map.
@@ -265,6 +269,8 @@ class AlienAgent(BaseAlienAgent):
             visible, obs, self._player_pos,
             self._player_seen, self._player_hiding,
         )
+
+    # ── Step ──────────────────────────────────────────────────────────────────
 
     def step(self, player_pos: tuple, heard_pos: tuple = None, step_num: int = 0) -> tuple:
         """Execute one step. player_pos and heard_pos are (y, x)."""
@@ -309,7 +315,6 @@ class AlienAgent(BaseAlienAgent):
                 self._teleport_to_vent(target_vent)
 
         # MOVEMENT — HUNT moves 2 cells per step; all other states move 1
-        H, W = self.knowledge.knowledge.shape
         steps = SPEED[self.state]
         for _ in range(steps):
             # RL training hook (not active in rule-based play):
@@ -341,6 +346,8 @@ class AlienAgent(BaseAlienAgent):
             "vent_teleport_used": self.vent_teleport_used,
         })
         return self.pos
+
+    # ── State machine ─────────────────────────────────────────────────────────
 
     def _get_explored_ratio(self, center: tuple, radius: int) -> float:
         """Return the fraction of cells within a square radius that have been observed."""
@@ -393,6 +400,8 @@ class AlienAgent(BaseAlienAgent):
                     self.state = AlienState.SEARCH
             elif self.last_heard_pos is None or self.steps_since_heard > 5:
                 self.state = AlienState.SEARCH
+
+    # ── Vent routing ──────────────────────────────────────────────────────────
 
     def _best_seen_vent_route_for_sound(self, sound_pos: tuple) -> Optional[tuple]:
         """Return the entry vent for the best vent shortcut to sound_pos, or None.
@@ -457,6 +466,8 @@ class AlienAgent(BaseAlienAgent):
         self.vent_teleport_used = True
         self.path               = []
         self.steps_no_replan    = self.replan_every  # force replan from new position
+
+    # ── Movement and path planning ────────────────────────────────────────────
 
     def _move_one(self) -> tuple:
         # Always replan in HUNT so the 2-cell-per-step movement never overshoots

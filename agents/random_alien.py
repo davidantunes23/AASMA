@@ -28,11 +28,15 @@ class RandomAlienAgent(BaseAlienAgent):
         self._known_map: Optional[np.ndarray] = None  # tile map built from cone observations
         self.seen_vents: set = set()                  # vent positions discovered so far
 
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
     def reset(self, start_pos: Optional[tuple] = None) -> None:
         if start_pos is not None:
             self.pos = start_pos
         self._known_map = None
         self.seen_vents = set()
+
+    # ── Observation ───────────────────────────────────────────────────────────
 
     def observe(self, obs: np.ndarray, **_kwargs) -> None:
         """Ingest cone observation, updating the known map and vent registry."""
@@ -43,6 +47,8 @@ class RandomAlienAgent(BaseAlienAgent):
         vy, vx = np.where(obs == 2)  # VENT=2
         for y, x in zip(vy.tolist(), vx.tolist()):
             self.seen_vents.add((int(y), int(x)))
+
+    # ── Step ──────────────────────────────────────────────────────────────────
 
     def step(self, _player_pos: tuple, _heard_pos: tuple = None, _step_num: int = 0) -> tuple:
         if self._known_map is None:

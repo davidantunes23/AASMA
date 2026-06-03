@@ -9,11 +9,17 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 
+# ── Message types ─────────────────────────────────────────────────────────────
+
+
 class CoordType(Enum):
     MISSION        = auto()  # a new mission tile was spotted
     MISSION_ACTIVE = auto()  # this agent is currently heading to / working a mission
     MISSION_DONE   = auto()  # a mission tile has been completed; remove from all lists
     EXIT           = auto()  # the exit tile was spotted for the first time
+
+
+# ── Message ───────────────────────────────────────────────────────────────────
 
 
 @dataclass

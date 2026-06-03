@@ -18,6 +18,9 @@ from typing import Iterable, Sequence
 from agents.base import TeamRole
 
 
+# ── Worker assignment ─────────────────────────────────────────────────────────
+
+
 def assign_worker_greedy(
     agent_specs: Sequence[object],
     mission_positions: Iterable[tuple[int, int]],
@@ -47,6 +50,9 @@ def assign_worker_greedy(
     return getattr(best, "label", None) if best is not None else None
 
 
+# ── Role clearing ─────────────────────────────────────────────────────────────
+
+
 def clear_roles(agent_specs: Sequence[object]) -> None:
     """Reset team_role to NONE on all human agents."""
     for s in agent_specs:
@@ -55,6 +61,9 @@ def clear_roles(agent_specs: Sequence[object]) -> None:
                 setattr(s.agent, "team_role", TeamRole.NONE)
             except Exception:
                 pass
+
+
+# ── Decoy assignment ──────────────────────────────────────────────────────────
 
 
 def assign_decoy_farthest(
@@ -90,6 +99,9 @@ def assign_decoy_farthest(
             best_score = min_d
 
     return getattr(best, "label", None) if best is not None else None
+
+
+# ── Omniscient worker assignment ──────────────────────────────────────────────
 
 
 def assign_workers_omniscient(
@@ -138,6 +150,9 @@ def assign_workers_omniscient(
         available_missions.remove(best_mission)
 
     return pairs
+
+
+# ── Runner assignment ─────────────────────────────────────────────────────────
 
 
 def assign_runner_residual(agent_specs: Sequence[object]) -> str | None:
