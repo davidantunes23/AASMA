@@ -29,20 +29,16 @@ from map_generator import Tile
 KnowledgeMode = Literal["off", "on"]
 AgentRole = Literal["human", "alien", "other"]
 
-# Sentinel values written into observation arrays by the simulation.
-# Negative so they cannot be confused with valid tile IDs (0–7).
-UNKNOWN_TILE = -1      # cell outside the agent's current FOV
-PLAYER_SEEN_TILE = -2  # written into alien knowledge map at last known player cell
-RADAR_PING_TILE = -3   # injected into human obs when radar fires
-NOISE_RIPPLE_TILE = -4 # injected to show where a sound ripple originated
+UNKNOWN_TILE = -1
+PLAYER_SEEN_TILE = -2
+RADAR_PING_TILE = -3
+NOISE_RIPPLE_TILE = -4
 
-# Topology distance thresholds (BFS steps) that map to radar threat levels.
-# Distances are measured on the actual grid, not Euclidean.
 RADAR_BANDS = {
-    "CRITICAL": (0, 7),           # alien is adjacent or very close
-    "CLOSE":    (8, 12),          # alien is in the same room or corridor
-    "NEAR":     (13, 18),         # alien is one or two rooms away
-    "FAR":      (19, float("inf")),  # alien is far — safe to act freely
+    "CRITICAL": (0, 7),
+    "CLOSE": (8, 12),
+    "NEAR": (13, 18),
+    "FAR": (19, float("inf")),
 }
 
 
@@ -131,7 +127,6 @@ class MissionManager:
         }
 
     def update(self, human_pos: tuple[int, int]):
-        curr_mission_done = False
         mission = self.missions.get(human_pos)
         if mission is None:
             return False
@@ -182,6 +177,20 @@ class GenericMapSimulation:
     HUMAN_MARKERS = ["o", "s", "^", "D", "P", "h"]
     ALIEN_MARKERS = ["X", "v", "<", ">", "*", "8"]
 
+    _THREAT_RING_CFG = [
+        (7,  "#FF3333", "CRITICAL"),
+        (12, "#FF8800", "CLOSE"),
+        (18, "#FFEE00", "NEAR"),
+        (25, "#44FF88", "FAR"),
+    ]
+    _THREAT_ORDER = {"CRITICAL": 0, "CLOSE": 1, "NEAR": 2, "FAR": 3}
+
+    @staticmethod
+    def _set_scatter_marker(artist, marker: str) -> None:
+        ms = MarkerStyle(marker)
+        path = ms.get_path().transformed(ms.get_transform())
+        artist.set_paths([path])
+
     def __init__(
         self,
         grid: np.ndarray,
@@ -208,6 +217,8 @@ class GenericMapSimulation:
         self.noise_radius = noise_radius
         self.radar_interval = radar_interval
         self._rng = np.random.default_rng(seed)  # seeded RNG — no global state pollution
+        _exit_matches = np.argwhere(grid == int(Tile.EXIT))
+        self._exit_pos: tuple[int, int] | None = (int(_exit_matches[0][0]), int(_exit_matches[0][1])) if len(_exit_matches) > 0 else None
 
         # Role / mission bookkeeping for dynamic reassignment
         self.known_missions: set[tuple[int, int]] = set()
@@ -255,8 +266,8 @@ class GenericMapSimulation:
         self._active_frame: SimulationFrame | None = None
         self._last_role_by_agent_id: dict[int, str] = {}
         # Enforce a minimum dwell time on mission tiles. Default minimum is 20 steps.
-        self.mission_steps_required: int = int(mission_steps) if mission_steps is not None else 20  # steps a human must spend on a mission tile to complete it
-        self._mission_dwell_progress: dict[tuple[int, int], int] = {}  # accumulated dwell steps per mission tile; never resets on leave
+        self.mission_steps_required: int = max(20, int(mission_steps) if mission_steps is not None else 20)
+        self._mission_dwell_progress: dict[tuple[int, int], int] = {}
 
         # Debug log for role/mission reassignment decisions (opt-in via debug_log=True).
         if debug_log:
@@ -372,8 +383,7 @@ class GenericMapSimulation:
         candidates = list(targets)
         if not candidates:
             return None
-        candidates.sort(key=lambda pos: abs(pos[0] - source[0]) + abs(pos[1] - source[1]))
-        return candidates[0]
+        return min(candidates, key=lambda pos: abs(pos[0] - source[0]) + abs(pos[1] - source[1]))
 
     def _view_radius_for(self, spec: AgentSpec) -> int:
         if spec.view_radius is not None:
@@ -395,7 +405,6 @@ class GenericMapSimulation:
     # ── Game mechanics (radar, noise, cone observation) ───────────────────────
 
     def _topology_distance(self, start: tuple[int, int], goal: tuple[int, int]) -> int:
-        """BFS distance through passable tiles. Falls back to Manhattan if no path exists."""
         if start == goal:
             return 0
         frontier = deque([(start, 0)])
@@ -422,12 +431,9 @@ class GenericMapSimulation:
         if self.steps_since_radar >= self.radar_interval:
             self.steps_since_radar = 0
             dist = self._topology_distance(human_pos_yx, alien_pos_yx)
-            for threat_level, (min_d, max_d) in RADAR_BANDS.items():
-                if min_d <= dist <= max_d:
-                    self.last_radar_threat = threat_level
-                    self.last_radar_dist = dist
-                    self.radar_active_for = 2
-                    break
+            self.last_radar_threat = self._radar_threat_for_distance(dist)
+            self.last_radar_dist = dist
+            self.radar_active_for = 2
         elif self.radar_active_for > 0:
             self.radar_active_for -= 1
         else:
@@ -454,28 +460,6 @@ class GenericMapSimulation:
             hy, hx = position
             obs[hy, hx] = RADAR_PING_TILE
         return obs
-
-    def _generate_noise(
-        self,
-        human_pos_yx: tuple[int, int],
-        human_hidden: bool,
-    ) -> tuple[int, int]:
-        hy, hx = human_pos_yx
-        heard_yx = (hy, hx)
-        if not human_hidden and self._rng.random() < self.p_noise:
-            off_y = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
-            off_x = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
-            ny = max(0, min(hy + off_y, self.grid.shape[0] - 1))
-            nx = max(0, min(hx + off_x, self.grid.shape[1] - 1))
-            heard_yx = (ny, nx)
-            self.last_noise_ripple = (hy, hx)
-            self.noise_ripple_age = 0
-        if self.last_noise_ripple is not None:
-            self.noise_ripple_age += 1
-            if self.noise_ripple_age > 9:
-                self.last_noise_ripple = None
-                self.last_noise_deliberate = False
-        return heard_yx
 
     # ── Agent helpers ─────────────────────────────────────────────────────────
 
@@ -1029,18 +1013,8 @@ class GenericMapSimulation:
                                        agent_id=getattr(spec.agent, "agent_id", None)))
         return snapshot
 
-    def _is_human(self, spec: AgentSpec) -> bool:
-        return spec.role == "human"
-
-    def _is_alien(self, spec: AgentSpec) -> bool:
-        return spec.role == "alien"
-
     def _exit_position(self) -> tuple[int, int] | None:
-        matches = np.argwhere(self.grid == int(Tile.EXIT))
-        if len(matches) == 0:
-            return None
-        y, x = matches[0]
-        return int(y), int(x)
+        return self._exit_pos
 
     def _mission_positions(self) -> list[tuple[int, int]]:
         matches = np.argwhere(self.grid == int(Tile.MISSION))
@@ -1217,8 +1191,7 @@ class GenericMapSimulation:
                 self._active_frame = None
                 return frames, outcome or "max_steps_reached"
 
-            # Update radar before agents act so humans can react to the current threat level.
-            # Radar fires every radar_interval steps and stays active for 2 steps after firing.
+            # Update radar before agents act so humans can react to current threat level
             radar_threat_by_label: dict[str, str | None] = {}
             radar_dist_by_label: dict[str, int | None] = {}
             if self.enable_mechanics:
@@ -1314,9 +1287,9 @@ class GenericMapSimulation:
                     for msg in outbox:
                         if getattr(msg, "coord_type", None) is None:
                             continue
-                        if str(getattr(msg, "coord_type", "")) == "CoordType.EXIT":
+                        if msg.coord_type == CoordType.EXIT:
                             self.shared_exit_coord = getattr(msg, "pos", None) or self.shared_exit_coord
-                        elif str(getattr(msg, "coord_type", "")) == "CoordType.MISSION":
+                        elif msg.coord_type == CoordType.MISSION:
                             pos = getattr(msg, "pos", None)
                             if pos is not None:
                                 self.shared_mission_coords.add(pos)
@@ -1331,17 +1304,16 @@ class GenericMapSimulation:
                         if to_deliver:
                             agent.receive_coords(to_deliver)
 
-            # Second pass: humans move first, then aliens. This ordering means the
-            # alien reacts to post-move human positions, not pre-move ones.
+            # Second pass: humans act first so they can set made_loud_noise etc.
             alien_positions = [self._get_position(s) for s in self.agents if s.role == "alien"]
             mission_positions_touched: set[tuple[int, int]] = set()
             for spec in [s for s in self.agents if s.role == "human" and s.label not in captured_humans and s.label not in escaped_humans]:
                 try:
-                    setattr(spec.agent, "exit_open", self._missions_remaining() == 0)
+                    setattr(spec.agent, "exit_open", exit_open)
                 except Exception:
                     pass
                 current_position = self._get_position(spec)
-                opposing_positions = [pos for pos in alien_positions]
+                opposing_positions = alien_positions
                 nearest_target = self._nearest_target(current_position, opposing_positions) or current_position
                 # humans generally ignore heard_pos; pass None
                 new_pos = spec.agent.step(nearest_target, None, step)
@@ -1360,37 +1332,37 @@ class GenericMapSimulation:
             for mission_pos in mission_positions_touched:
                 self._complete_mission_at(mission_pos)
 
-            # Debug: log hidden humans and idle mission tiles every step.
-            active_human_specs = [
-                s for s in self.agents
-                if s.role == "human"
-                and s.label not in captured_humans
-                and s.label not in escaped_humans
-            ]
-            for spec in active_human_specs:
-                if bool(getattr(spec.agent, "hidden", False)):
-                    self._debug_log(
-                        f"agent_hidden: step={step}, label={spec.label},"
-                        f" pos={self._get_position(spec)},"
-                        f" role={self._role_name(getattr(spec.agent, 'team_role', None))},"
-                        f" radar={getattr(spec.agent, 'last_radar_threat', None)}"
-                    )
-            for pos in sorted(self.known_missions):
-                if pos not in mission_positions_touched:
-                    progress = self._mission_dwell_progress.get(pos, 0)
-                    nearest_label = None
-                    nearest_dist = None
-                    for spec in active_human_specs:
-                        p = self._get_position(spec)
-                        d = abs(p[0] - pos[0]) + abs(p[1] - pos[1])
-                        if nearest_dist is None or d < nearest_dist:
-                            nearest_dist = d
-                            nearest_label = spec.label
-                    self._debug_log(
-                        f"mission_idle: step={step}, pos={pos},"
-                        f" progress={progress}/{self.mission_steps_required},"
-                        f" nearest={nearest_label}(dist={nearest_dist})"
-                    )
+            if self.debug_log_path is not None:
+                active_human_specs = [
+                    s for s in self.agents
+                    if s.role == "human"
+                    and s.label not in captured_humans
+                    and s.label not in escaped_humans
+                ]
+                for spec in active_human_specs:
+                    if bool(getattr(spec.agent, "hidden", False)):
+                        self._debug_log(
+                            f"agent_hidden: step={step}, label={spec.label},"
+                            f" pos={self._get_position(spec)},"
+                            f" role={self._role_name(getattr(spec.agent, 'team_role', None))},"
+                            f" radar={getattr(spec.agent, 'last_radar_threat', None)}"
+                        )
+                for pos in sorted(self.known_missions):
+                    if pos not in mission_positions_touched:
+                        progress = self._mission_dwell_progress.get(pos, 0)
+                        nearest_label = None
+                        nearest_dist = None
+                        for spec in active_human_specs:
+                            p = self._get_position(spec)
+                            d = abs(p[0] - pos[0]) + abs(p[1] - pos[1])
+                            if nearest_dist is None or d < nearest_dist:
+                                nearest_dist = d
+                                nearest_label = spec.label
+                        self._debug_log(
+                            f"mission_idle: step={step}, pos={pos},"
+                            f" progress={progress}/{self.mission_steps_required},"
+                            f" nearest={nearest_label}(dist={nearest_dist})"
+                        )
 
             # Mark any humans who collided with aliens after human movement.
             post_human_agents = self._snapshot_agents()
@@ -1399,8 +1371,6 @@ class GenericMapSimulation:
                 captured_humans.update(newly_captured)
                 self._release_captured_worker_claims(newly_captured)
                 self._maybe_reassign_roles(worker_died=True)
-            else:
-                captured_humans.update(newly_captured)
 
             # Compute heard position for aliens (consider deliberate loud noises or DECOY response to WORKER threat)
             human_specs = [s for s in self.agents if s.role == "human" and s.label not in captured_humans and s.label not in escaped_humans]
@@ -1438,8 +1408,6 @@ class GenericMapSimulation:
                         continue
                     if self._rng.random() < self.p_noise:
                         h_pos_yx = self._get_position(hs)
-                        # Jitter the sound position by up to noise_radius cells so the
-                        # alien gets an approximate location, not the exact human position.
                         off_y = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
                         off_x = int(self._rng.integers(-self.noise_radius, self.noise_radius + 1))
                         ny = max(0, min(h_pos_yx[0] + off_y, self.grid.shape[0] - 1))
@@ -1447,8 +1415,6 @@ class GenericMapSimulation:
                         noise_sources.append((h_pos_yx, (ny, nx)))
 
                 if noise_sources:
-                    # Only one noise event reaches the alien per step — pick randomly
-                    # to avoid giving the alien perfect multi-source triangulation.
                     idx = int(self._rng.integers(len(noise_sources)))
                     h_pos_yx, heard_yx_for_aliens = noise_sources[idx]
                     self.last_noise_ripple = h_pos_yx
@@ -1460,7 +1426,7 @@ class GenericMapSimulation:
                         self.last_noise_ripple = None
                         self.last_noise_deliberate = False
 
-            # Third pass: aliens act with the post-move human positions and the noise signal.
+            # Third pass: aliens act using heard_yx_for_aliens and updated human positions
             for spec in [s for s in self.agents if s.role == "alien"]:
                 current_position = self._get_position(spec)
                 opposing_positions = [
@@ -1497,8 +1463,6 @@ class GenericMapSimulation:
                             agent.state = AlienState.SEARCH
                         except Exception:
                             pass
-            else:
-                captured_humans.update(newly_captured)
 
             if all_resolved():
                 outcome = escape_outcome()
@@ -1565,11 +1529,6 @@ class GenericMapSimulation:
         has_shared_belief = any(f.shared_belief_map is not None for f in frames)
 
         if world_only or self.knowledge_mode == "off":
-            def _set_scatter_marker(artist, marker: str) -> None:
-                ms = MarkerStyle(marker)
-                path = ms.get_path().transformed(ms.get_transform())
-                artist.set_paths([path])
-
             fig, ax = plt.subplots(1, 1, figsize=(8, 6), dpi=120)
             fig.patch.set_facecolor("#000000")
             initial_grid = frames[0].grid_snapshot if frames[0].grid_snapshot is not None else self.grid
@@ -1611,21 +1570,14 @@ class GenericMapSimulation:
             # Radar threat rings — one concentric outline ring per threat band,
             # always faintly visible; the active band is highlighted.
             # Radii match the outer edge of each RADAR_BANDS distance range.
-            _THREAT_RING_CFG = [
-                (7,  "#FF3333", "CRITICAL"),
-                (12, "#FF8800", "CLOSE"),
-                (18, "#FFEE00", "NEAR"),
-                (25, "#44FF88", "FAR"),
-            ]
             h0y, h0x = next((a.position for a in frames[0].agents if a.role == "human"), (0, 0))
             threat_rings = []
             if len([a for a in frames[0].agents if a.role == "human"]) == 1:
-                for radius, color, _ in _THREAT_RING_CFG:
+                for radius, color, _ in self._THREAT_RING_CFG:
                     ring = plt.Circle((h0x, h0y), radius, fill=False, edgecolor=color,
                                       linewidth=0.8, linestyle="--", alpha=0.08, zorder=3)
                     ax.add_patch(ring)
                     threat_rings.append(ring)
-            _threat_order = {"CRITICAL": 0, "CLOSE": 1, "NEAR": 2, "FAR": 3}
 
             # Noise ripple — 3 concentric dashed yellow rings
             ripple_circles = [
@@ -1667,7 +1619,7 @@ class GenericMapSimulation:
                         human_ring_idx += 1
                         continue
                     y, x = agent.position
-                    _set_scatter_marker(artist, self._role_marker(agent, human_ring_idx if agent.role == "human" else 0))
+                    self._set_scatter_marker(artist, self._role_marker(agent, human_ring_idx if agent.role == "human" else 0))
                     artist.set_visible(True)
                     artist.set_offsets([[x, y]])
                     artist.set_alpha(0.55 if agent.hidden else 1.0)
@@ -1687,7 +1639,7 @@ class GenericMapSimulation:
 
                 # Radar threat rings — recentre on current human pos, highlight active band
                 humans = [a for a in state.agents if a.role == "human"]
-                active_idx = _threat_order.get(state.radar_threat, -1)
+                active_idx = self._THREAT_ORDER.get(state.radar_threat, -1)
                 if len(humans) == 1:
                     hy, hx = humans[0].position
                     for i, ring in enumerate(threat_rings):
@@ -1699,45 +1651,10 @@ class GenericMapSimulation:
                             ring.set_alpha(0.08)
                             ring.set_linewidth(0.8)
 
-                # Noise ripple
-                if state.noise_ripple_pos is not None:
-                    ny, nx = state.noise_ripple_pos
-                    color = "#00FFFF" if state.noise_deliberate else "yellow"
-                    for c in ripple_circles:
-                        c.set_edgecolor(color)
-                        c.set_center((nx, ny))
-                        c.set_visible(True)
-                else:
-                    for c in ripple_circles:
-                        c.set_visible(False)
-
-                # Alien heard position
-                if state.alien_heard_pos is not None:
-                    ahy, ahx = state.alien_heard_pos
-                    color = "#00FFFF" if state.noise_deliberate else "#FF4444"
-                    alien_heard_marker.set_color(color)
-                    alien_heard_marker.set_offsets([[ahx, ahy]])
-                    alien_heard_marker.set_visible(True)
-                else:
-                    alien_heard_marker.set_visible(False)
-
-                if exit_marker is not None:
-                    exit_color = "#f39c12" if state.exit_unlocked else "#7f8c8d"
-                    exit_alpha = 1.0 if state.exit_unlocked else 0.55
-                    exit_marker.set_color(exit_color)
-                    exit_marker.set_alpha(exit_alpha)
-
-                human_mode = next((a.mode for a in state.agents if a.role == "human"), "")
-                alien_mode = next((a.mode for a in state.agents if a.role == "alien"), "")
-                exit_state = "UNLOCKED" if state.exit_unlocked else "LOCKED"
-                status_text.set_text(
-                    f"Step {state.step:4d}/{len(frames)-1:4d}"
-                    f"  |  Human: {human_mode:<10}"
-                    f"  |  {self._format_human_roles(state)}"
-                    f"  Alien: {alien_mode:<11}"
-                    f"  Exit: {exit_state:<9}"
-                    f"  |  {outcome}"
-                )
+                self._update_ripple_circles(ripple_circles, state)
+                self._update_alien_heard_marker(alien_heard_marker, state)
+                self._update_exit_marker(exit_marker, state)
+                status_text.set_text(self._format_status_text(state, frames, outcome))
                 if shared_text is not None:
                     shared_text.set_text(self._format_shared_coords(state))
                 artists = [*marker_artists, *hidden_rings, *threat_rings, *ripple_circles,
@@ -1762,11 +1679,6 @@ class GenericMapSimulation:
             return
 
         # Full mode: world + one knowledge panel per agent
-        def _set_scatter_marker(artist, marker: str) -> None:
-            ms = MarkerStyle(marker)
-            path = ms.get_path().transformed(ms.get_transform())
-            artist.set_paths([path])
-
         n_panels = 1 + len(frames[0].agents)
         use_grid = n_panels > 3
         if use_grid:
@@ -1894,21 +1806,14 @@ class GenericMapSimulation:
             sbm_fov_img = shared_belief_ax.imshow(sbm_fov_rgba, zorder=3)
 
         # Radar threat rings on world panel
-        _THREAT_RING_CFG = [
-            (7,  "#FF3333", "CRITICAL"),
-            (12, "#FF8800", "CLOSE"),
-            (18, "#FFEE00", "NEAR"),
-            (25, "#44FF88", "FAR"),
-        ]
         h0y, h0x = next((a.position for a in frames[0].agents if a.role == "human"), (0, 0))
         threat_rings = []
         if len([a for a in frames[0].agents if a.role == "human"]) == 1:
-            for radius, color, _ in _THREAT_RING_CFG:
+            for radius, color, _ in self._THREAT_RING_CFG:
                 ring = plt.Circle((h0x, h0y), radius, fill=False, edgecolor=color,
                                   linewidth=0.8, linestyle="--", alpha=0.08, zorder=3)
                 world_ax.add_patch(ring)
                 threat_rings.append(ring)
-        _threat_order = {"CRITICAL": 0, "CLOSE": 1, "NEAR": 2, "FAR": 3}
         # Noise ripple rings on world panel
         ripple_circles = [
             plt.Circle((h0x, h0y), 0.35 * (i + 1), fill=False, edgecolor="yellow",
@@ -1963,7 +1868,7 @@ class GenericMapSimulation:
                     human_ring_idx += 1
                     continue
                 y, x = agent.position
-                _set_scatter_marker(artist, self._role_marker(agent, human_ring_idx if agent.role == "human" else 0))
+                self._set_scatter_marker(artist, self._role_marker(agent, human_ring_idx if agent.role == "human" else 0))
                 artist.set_visible(True)
                 artist.set_offsets([[x, y]])
                 artist.set_alpha(0.55 if agent.hidden else 1.0)
@@ -1984,7 +1889,7 @@ class GenericMapSimulation:
                     opp_m.set_visible(False)
                     continue
                 y, x = agent.position
-                _set_scatter_marker(marker, "X" if agent.role == "alien" else self._role_marker(agent, 0))
+                self._set_scatter_marker(marker, "X" if agent.role == "alien" else self._role_marker(agent, 0))
                 marker.set_visible(True)
                 marker.set_offsets([[x, y]])
 
@@ -2005,7 +1910,7 @@ class GenericMapSimulation:
 
             # Radar threat rings
             humans = [a for a in state.agents if a.role == "human"]
-            active_idx = _threat_order.get(state.radar_threat, -1)
+            active_idx = self._THREAT_ORDER.get(state.radar_threat, -1)
             if len(humans) == 1:
                 hy, hx = humans[0].position
                 for i, ring in enumerate(threat_rings):
@@ -2017,46 +1922,14 @@ class GenericMapSimulation:
                         ring.set_alpha(0.08)
                         ring.set_linewidth(0.8)
 
-            # Noise ripple
-            if state.noise_ripple_pos is not None:
-                ny, nx = state.noise_ripple_pos
-                color = "#00FFFF" if state.noise_deliberate else "yellow"
-                for c in ripple_circles:
-                    c.set_edgecolor(color)
-                    c.set_center((nx, ny))
-                    c.set_visible(True)
-            else:
-                for c in ripple_circles:
-                    c.set_visible(False)
+            self._update_ripple_circles(ripple_circles, state)
 
             # Alien heard position on alien knowledge panels
             for m in alien_heard_markers:
-                if state.alien_heard_pos is not None:
-                    ahy, ahx = state.alien_heard_pos
-                    color = "#00FFFF" if state.noise_deliberate else "#FF4444"
-                    m.set_color(color)
-                    m.set_offsets([[ahx, ahy]])
-                    m.set_visible(True)
-                else:
-                    m.set_visible(False)
+                self._update_alien_heard_marker(m, state)
 
-            if exit_marker is not None:
-                exit_color = "#f39c12" if state.exit_unlocked else "#7f8c8d"
-                exit_alpha = 1.0 if state.exit_unlocked else 0.55
-                exit_marker.set_color(exit_color)
-                exit_marker.set_alpha(exit_alpha)
-
-            human_mode = next((a.mode for a in state.agents if a.role == "human"), "")
-            alien_mode = next((a.mode for a in state.agents if a.role == "alien"), "")
-            exit_state = "UNLOCKED" if state.exit_unlocked else "LOCKED"
-            status_text.set_text(
-                f"Step {state.step:4d}/{len(frames)-1:4d}"
-                f"  |  Human: {human_mode:<10}"
-                f"  |  {self._format_human_roles(state)}"
-                f"  Alien: {alien_mode:<11}"
-                f"  Exit: {exit_state:<9}"
-                f"  |  {outcome}"
-            )
+            self._update_exit_marker(exit_marker, state)
+            status_text.set_text(self._format_status_text(state, frames, outcome))
             if shared_text is not None:
                 shared_text.set_text(self._format_shared_coords(state))
 
@@ -2076,7 +1949,7 @@ class GenericMapSimulation:
                     else:
                         y, x = pos_by_label.get(label, agent.position)
                         m.set_offsets([[x, y]])
-                        _set_scatter_marker(m, self._role_marker(agent, hidx))
+                        self._set_scatter_marker(m, self._role_marker(agent, hidx))
                         m.set_visible(True)
                 if sbm_fov_img is not None:
                     fov_rgba = np.zeros((H_grid, W_grid, 4), dtype=np.float32)
@@ -2191,6 +2064,53 @@ class GenericMapSimulation:
             label = label_by_id.get(agent_id, f"human_{agent_id + 1}")
             parts.append(f"{label}=id{agent_id}")
         return "Humans: " + ", ".join(parts)
+
+    @staticmethod
+    def _update_ripple_circles(ripple_circles, state: SimulationFrame) -> None:
+        if state.noise_ripple_pos is not None:
+            ny, nx = state.noise_ripple_pos
+            color = "#00FFFF" if state.noise_deliberate else "yellow"
+            for c in ripple_circles:
+                c.set_edgecolor(color)
+                c.set_center((nx, ny))
+                c.set_visible(True)
+        else:
+            for c in ripple_circles:
+                c.set_visible(False)
+
+    @staticmethod
+    def _update_alien_heard_marker(marker, state: SimulationFrame) -> None:
+        if state.alien_heard_pos is not None:
+            ahy, ahx = state.alien_heard_pos
+            color = "#00FFFF" if state.noise_deliberate else "#FF4444"
+            marker.set_color(color)
+            marker.set_offsets([[ahx, ahy]])
+            marker.set_visible(True)
+        else:
+            marker.set_visible(False)
+
+    @staticmethod
+    def _update_exit_marker(exit_marker, state: SimulationFrame) -> None:
+        if exit_marker is None:
+            return
+        exit_color = "#f39c12" if state.exit_unlocked else "#7f8c8d"
+        exit_alpha = 1.0 if state.exit_unlocked else 0.55
+        exit_marker.set_color(exit_color)
+        exit_marker.set_alpha(exit_alpha)
+
+    @staticmethod
+    def _format_status_text(state: SimulationFrame, frames: list, outcome: str) -> str:
+        human_mode = next((a.mode for a in state.agents if a.role == "human"), "")
+        alien_mode = next((a.mode for a in state.agents if a.role == "alien"), "")
+        exit_state = "UNLOCKED" if state.exit_unlocked else "LOCKED"
+        return (
+            f"Step {state.step:4d}/{len(frames)-1:4d}"
+            f"  |  Human: {human_mode:<10}"
+            f"  |  {GenericMapSimulation._format_human_roles(state)}"
+            f"  Alien: {alien_mode:<11}"
+            f"  Exit: {exit_state:<9}"
+            f"  |  {outcome}"
+        )
 
     @staticmethod
     def _maybe_show(fig):
