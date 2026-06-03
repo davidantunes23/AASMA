@@ -47,14 +47,14 @@ python map_generator.py 42
 # Save map PNG visualizations
 python map_generator.py 42 --visualize
 
-# Multi-episode evaluation (rule alien only, all human models)
+# Multi-episode evaluation across all human/alien pairings
 python evaluate_agents.py --episodes 10 --no-show
 
 # Verification command (use after any change)
 python run.py --human-class human --human-count 1 --mission-count 0 --no-show --output output/verify.gif && echo "OK"
 ```
 
-Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps` (default: 300), `--fps`, `--noise-radius`, `--noise-prob` (default: 0.10), `--human-view`, `--alien-fov`, `--knowledge {on,off}`, `--style {full,world}`, `--no-render`, `--no-show`, `--random-map`, `--min-start-distance`, `--human-count` (default: 3), `--human-class {human,role,coop,omniscient,random}`, `--alien-count`, `--alien-class {alien,random}`, `--mission-count` (default: 2), `--mission-steps`.
+Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps`, `--fps`, `--noise-radius`, `--human-view`, `--alien-fov`, `--knowledge {on,off}`, `--style {full,world}`, `--no-render`, `--no-show`, `--random-map`, `--min-start-distance`, `--human-count` (default: 3), `--human-class {human,role,coop,omniscient,random}`, `--alien-count`, `--alien-class {alien,random}`, `--mission-count` (default: 2), `--mission-steps`.
 
 ## Architecture
 
@@ -140,10 +140,8 @@ Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-
 Key mechanics (active when `enable_mechanics=True`; disabled for `--demo random`):
 
 - **Radar**: topology-aware BFS distance → CRITICAL/CLOSE/NEAR/FAR every `radar_interval` steps
-- **Noise**: player emits a jittered sound position each step with `p_noise` probability (default 0.10, configurable via `--noise-prob`); suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
+- **Noise**: player emits a jittered sound position each step with `p_noise` probability (default 0.05, configurable via `--noise-prob`); suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
 - **Cone FOV**: both agent types use `cone_fov()` — directional, wall/hide-blocked LoS via Bresenham
-
-`GenericMapSimulation` accepts `debug_log=False`; pass `True` to write role/mission reassignment decisions to `output/logs/` (disabled by default — no files or directories are created otherwise).
 
 ### Visualization (`simulation.py` render)
 
@@ -157,13 +155,7 @@ Render produces a multi-panel GIF: **World** panel + per-agent knowledge panels.
 
 ### Evaluation (`evaluate_agents.py`)
 
-Evaluates all human models against the rule-based alien across multiple episodes. Human models: `random`, `rule`, `role`, `coop`, `omniscient`. Output goes to `output/eval/` by default.
-
-Plots produced per matchup: `survival_curve` (mean active humans over time), `capture_escape_timeline` (per-episode outcome scatter). A `rule_alien_human_comparison` stacked bar chart aggregates all human models. CSV summaries with escaped counts, avg steps, timeout rate, and mission completion rate are written alongside plots.
-
-**Outcome classification**: `full_escape`, `partial_escape`, `full_capture`, `timeout`. Note that `timeout` covers both `max_steps_reached` and `idle_timeout` (triggered when all agents are stationary for `--idle-limit` steps, default 50) — idle timeouts can occur well before `max_steps`.
-
-Key `evaluate_agents.py` flags: `--episodes` (default: 30), `--seed`, `--map-sizes` (default: `60x40`), `--max-steps` (default: 2000), `--view-length`, `--idle-limit`, `--output-dir`, `--humans {random,rule,role,coop,omniscient,all}`, `--noise-prob`.
+Runs all human/alien pairings (random, rule, omniscient, role, coop humans × random and rule aliens) across multiple episodes with a fixed map alpha. Produces per-pairing bar charts, CSV summaries, and a stacked comparison chart for all human models vs the rule alien. Output goes to `output/eval_pairs/` by default.
 
 ### Training (`training/`)
 

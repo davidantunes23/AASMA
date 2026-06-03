@@ -10,7 +10,6 @@ Exports:
 """
 from __future__ import annotations
 
-import heapq
 from abc import ABC, abstractmethod
 from enum import Enum, IntEnum
 
@@ -158,54 +157,3 @@ class BaseHumanAgent(BaseAgent):
         super().__init__(pos, direction, view_length)
         self.exit_open: bool = False           # set by simulation once all missions are completed
         self.team_role: "TeamRole | None" = None  # assigned role (WORKER/RUNNER/DECOY); None if uncoordinated
-        self._nav_path: list[tuple[int, int]] = []       # cached A* path to current target
-        self._nav_target: tuple[int, int] | None = None  # target the cached path leads to
-        self._steps_on_path: int = 0                     # steps taken since last A* replan
-
-    def _astar_to(self, target: tuple[int, int]) -> list[tuple[int, int]]:
-        """A* path from self.pos to target via the current known map. Returns full path or []."""
-        start = self.pos
-        if start == target:
-            return [start]
-        open_set: list = []
-        heapq.heappush(open_set, (0, start))
-        came_from: dict[tuple[int, int], tuple[int, int]] = {}
-        g: dict[tuple[int, int], int] = {start: 0}
-        while open_set:
-            _, cur = heapq.heappop(open_set)
-            if cur == target:
-                path = []
-                while cur in came_from:
-                    path.append(cur)
-                    cur = came_from[cur]
-                path.append(start)
-                path.reverse()
-                return path
-            for neighbor, _ in self._walkable_neighbors(cur):
-                ng = g[cur] + 1
-                if ng < g.get(neighbor, float("inf")):
-                    came_from[neighbor] = cur
-                    g[neighbor] = ng
-                    h = abs(neighbor[0] - target[0]) + abs(neighbor[1] - target[1])
-                    heapq.heappush(open_set, (ng + h, neighbor))
-        return []
-
-    def _step_toward_target(self, target: tuple[int, int]) -> tuple[int, int] | None:
-        """A* step toward a specific cell, replanning when target changes or every 3 steps."""
-        if target != self._nav_target or not self._nav_path or self._steps_on_path >= 3:
-            self._nav_target = target
-            self._nav_path = self._astar_to(target)
-            self._steps_on_path = 0
-        if not self._nav_path:
-            return None
-        self._nav_path.pop(0)  # consume current position
-        self._steps_on_path += 1
-        if not self._nav_path:
-            return None
-        nxt = self._nav_path[0]
-        self.direction = direction_from_delta(nxt[0] - self.pos[0], nxt[1] - self.pos[1])
-        return nxt
-
-    def _walkable_neighbors(self, position: tuple[int, int]) -> list[tuple["Direction", tuple[int, int]]]:
-        """Return traversable neighbours of position. Subclasses must override."""
-        raise NotImplementedError

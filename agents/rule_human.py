@@ -53,10 +53,8 @@ class HumanAgent(BaseHumanAgent):
         self._known_exit: tuple[int, int] | None = None    # exit position once seen
         self._known_missions: set[tuple[int, int]] = set() # mission tiles seen and not yet completed
         self._completed_missions: set[tuple[int, int]] = set()  # missions already finished
-        self._current_objective: tuple[int, int] | None = None  # current navigation target
+        self._current_objective: tuple[int, int] | None = None  # current BFS navigation target
         self._observed_aliens: set[tuple[int, int]] = set()  # alien positions seen this step
-        self._nav_path: list[tuple[int, int]] = []           # cached A* path to current target
-        self._nav_target: tuple[int, int] | None = None      # target the cached path leads to
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -91,13 +89,11 @@ class HumanAgent(BaseHumanAgent):
 
         # PRIORITY 2: Hide when threatened and no nearby exit.
         if self._should_hide_now():
-            spot = self._get_closest_hiding_spot()
-            if spot is not None:
-                nxt = self._step_toward_target(spot)
-                if nxt is not None:
-                    self.pos = nxt
-                    self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
-                    return self.pos
+            nxt = self._get_closest_hiding_spot()
+            if nxt is not None:
+                self.pos = nxt
+                self.hidden = bool(self._tile_at(self.pos) == int(Tile.HIDE))
+                return self.pos
 
         # PRIORITY 3: Navigate to current objective (mission tile or exit).
         self._current_objective = self._select_objective()
@@ -142,9 +138,6 @@ class HumanAgent(BaseHumanAgent):
         self._completed_missions = set()
         self._current_objective = None
         self._observed_aliens = set()
-        self._nav_path = []
-        self._nav_target = None
-        self._steps_on_path = 0
         self.hidden = False
         self.last_radar_threat = None
         self.last_radar_dist = None
@@ -169,8 +162,6 @@ class HumanAgent(BaseHumanAgent):
         self._completed_missions = set()
         self._current_objective = None
         self._observed_aliens = set()
-        self._nav_path = []
-        self._nav_target = None
 
     def _integrate_observation(self, obs: np.ndarray):
         """Copy visible tile IDs into the known map; detect exit, missions, and aliens."""
@@ -215,6 +206,13 @@ class HumanAgent(BaseHumanAgent):
         self._known_missions -= self._completed_missions
 
     # ── Navigation ────────────────────────────────────────────────────────────
+
+    def _step_toward_target(self, target: tuple[int, int]) -> tuple[int, int] | None:
+        """BFS next step toward a specific cell."""
+        nxt = self._bfs_next_step(lambda pos: pos == target)
+        if nxt is not None and nxt != self.pos:
+            self.direction = direction_from_delta(nxt[0] - self.pos[0], nxt[1] - self.pos[1])
+        return nxt
 
     def _next_step_to_nearest_floor_frontier(self) -> tuple[int, int] | None:
         """BFS next step toward the nearest FLOOR cell adjacent to unknown space."""
@@ -320,23 +318,11 @@ class HumanAgent(BaseHumanAgent):
         return neighbors
 
     def _get_closest_hiding_spot(self) -> tuple[int, int] | None:
-        """BFS to find the nearest reachable HIDE tile; returns the destination."""
+        """Single BFS: first step toward the nearest reachable HIDE tile."""
         hiding_spots = self._get_known_hiding_spots()
         if not hiding_spots:
             return None
-        hiding_set = set(hiding_spots)
-        start = self.pos
-        frontier = deque([start])
-        visited = {start}
-        while frontier:
-            current = frontier.popleft()
-            if current in hiding_set:
-                return current
-            for neighbor, _ in self._walkable_neighbors(current):
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    frontier.append(neighbor)
-        return None
+        return self._bfs_next_step(lambda pos: pos in hiding_spots)
 
     # ── Decision helpers ──────────────────────────────────────────────────────
 
