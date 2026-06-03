@@ -94,7 +94,7 @@ class MapGenerator:
         self.alpha = alpha
         self.seed = seed if seed is not None else random.randint(0, 2**31)
 
-        scale = max(width / 60.0, height / 40.0)
+        scale = max(width / 60.0, height / 40.0)  # relative to the reference 60×40 map size
         if min_room_size is None:
             min_room_size = max(3, int(round(3 * scale)))
         if max_room_size is None:
@@ -106,7 +106,7 @@ class MapGenerator:
         self.max_room_size = max_room_size
         self.max_rooms = max_rooms
         if max_hides_per_room is None:
-            self.max_hides_per_room = int(max_room_size * max_room_size * 0.10)
+            self.max_hides_per_room = int(max_room_size * max_room_size * 0.10)  # cap at ~10% of max room area
         else:
             if max_hides_per_room < 0:
                 raise ValueError("max_hides_per_room must be >= 0")
@@ -150,17 +150,7 @@ class MapGenerator:
         Returns:
             (best_grid, best_metadata)
         """
-        alpha = self.alpha if alpha is None else float(np.clip(alpha, -1.0, 1.0))
-        target_player_exit_dist = (
-            self.target_player_exit_dist
-            if target_player_exit_dist is None
-            else target_player_exit_dist
-        )
-        target_alien_player_dist = (
-            self.target_alien_player_dist
-            if target_alien_player_dist is None
-            else target_alien_player_dist
-        )
+        alpha = self.alpha if alpha is None else float(np.clip(alpha, -1.0, 1.0))  # clamp to valid range
 
         best_gen: MapGenerator | None = None
         best_score = float("inf")
@@ -189,9 +179,8 @@ class MapGenerator:
                 best_score = score
                 best_gen = cand
 
-        assert best_gen is not None
-        # Copy best candidate into self (for consistency with rest of API)
-        self.__dict__.update(best_gen.__dict__)
+        assert best_gen is not None  # always true: tries >= 1 so at least one candidate exists
+        self.__dict__.update(best_gen.__dict__)  # shallow-copy best candidate into self
         return self.grid.copy(), self.metadata
 
     def _bias_score(
@@ -212,7 +201,7 @@ class MapGenerator:
     @property
     def vent_probability(self) -> float:
         """Fraction of floor tiles converted to vents. Increases with alpha."""
-        return 0.5 + 0.5 * self.alpha
+        return 0.5 + 0.5 * self.alpha  # maps alpha ∈ [-1,1] → probability ∈ [0,1]
 
     def hide_count_distribution(self, room_max_hides: int) -> list[float]:
         """
@@ -227,9 +216,9 @@ class MapGenerator:
             return [1.0]
 
         counts = list(range(room_max_hides + 1))
-        tilt = -2.2 * self.alpha
+        tilt = -2.2 * self.alpha          # negative alpha → positive tilt → higher-k weights
         logits = [tilt * k for k in counts]
-        max_logit = max(logits)
+        max_logit = max(logits)           # subtract max for numerical stability (log-sum-exp trick)
         weights = [math.exp(v - max_logit) for v in logits]
         total = sum(weights)
         return [w / total for w in weights]
@@ -293,10 +282,30 @@ class MapGenerator:
             json.dump(self.to_dict(), f, indent=2)
         print(f"Saved -> {path}")
 
+    @classmethod
+    def load(cls, path: str) -> "MapGenerator":
+        """Reconstruct a MapGenerator from a saved JSON file."""
+        with open(path) as f:
+            data = json.load(f)
+        m = data["metadata"]
+        gen = cls(
+            width=m["width"],
+            height=m["height"],
+            alpha=m["alpha"],
+            seed=m["seed"],
+            mission_count=m.get("mission_count", 0),
+        )
+        gen.grid = np.array(data["grid"], dtype=np.int8)
+        gen.metadata = m
+        gen.player_pos = tuple(m["player_start"])
+        gen.alien_pos  = tuple(m["alien_start"])
+        gen.exit_pos   = tuple(m["exit_pos"])
+        return gen
+
     # ── Room placement ──────────────────────────────────────────────────────────
     def _place_rooms(self):
         attempts = 0
-        while len(self.rooms) < self.max_rooms and attempts < 400:
+        while len(self.rooms) < self.max_rooms and attempts < 400:  # 400-attempt cap prevents infinite loop on dense maps
             attempts += 1
             w = self.rng.randint(self.min_room_size, self.max_room_size)
             h = self.rng.randint(self.min_room_size, self.max_room_size)
@@ -307,9 +316,9 @@ class MapGenerator:
                 self.rooms.append((x, y, w, h))
 
     def _overlaps(self, x, y, w, h) -> bool:
-        pad = 1
+        pad = 1  # enforce a 1-cell gap between rooms so corridors have room to carve
         for rx, ry, rw, rh in self.rooms:
-            if x < rx + rw + pad and x + w + pad > rx and y < ry + rh + pad > ry:
+            if x < rx + rw + pad and x + w + pad > rx and y < ry + rh + pad and y + h + pad > ry:
                 return True
         return False
 
@@ -352,13 +361,15 @@ class MapGenerator:
         # Place spawns and exit at room centres, maximising distance
         centres = [self._room_centre(r) for r in self.rooms]
 
+        # Player spawns at the first room centres, alien at the last, exit at the middle.
+        # This maximises separation between players and the alien on generation.
         for i in range(self.human_count):
             px, py = centres[i]
             self.grid[py, px] = Tile.PLAYER_START
-        
-        ax, ay = centres[-1]
+
+        ax, ay = centres[-1]   # alien: last room (farthest from player start)
         mid = len(centres) // 2
-        ex, ey = centres[mid]
+        ex, ey = centres[mid]  # exit: middle room
 
         px, py = centres[0]
         self.player_pos = (px, py)
@@ -385,6 +396,8 @@ class MapGenerator:
         for room in self.rooms:
             x, y, w, h = room
             # Place hides on the wall ring surrounding the room.
+            # Hiding spots are placed on wall cells bordering the room, not inside it.
+            # This keeps the room floor clear and makes hides feel like alcoves.
             wall_border_cells = []
             for wy in range(y - 1, y + h + 1):
                 for wx in range(x - 1, x + w + 1):
@@ -448,6 +461,7 @@ class MapGenerator:
                     special_tiles.add((mx, my))
 
     def _bfs_reachable(self, start, passable) -> set:
+        # NOTE: positions here are (x, y) — opposite of the agents' (y, x) convention.
         visited = {start}
         queue = deque([start])
         dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
@@ -644,57 +658,6 @@ def visualise_pygame(gen: MapGenerator, cell: int = 24):
         clock.tick(30)
 
     pygame.quit()
-
-
-# ── Demo ───────────────────────────────────────────────────────────────────────
-def run_demo(seed: int | None = None):
-    if seed is None:
-        seed = random.randint(0, 2**31)
-
-    print("=" * 70)
-    print(f"  BALANCED MAP  (alpha = 0.0, seed = {seed})")
-    print("=" * 70)
-    g0 = MapGenerator(width=42, height=20, alpha=0.0, seed=seed)
-    g0.generate()
-    g0.print_map()
-
-    print()
-    print("=" * 70)
-    print(f"  ALIEN-FAVOURED  (alpha = +0.8, seed = {seed})  — more vents")
-    print("=" * 70)
-    g_a = MapGenerator(width=42, height=20, alpha=0.8, seed=seed)
-    g_a.generate()
-    g_a.print_map()
-
-    print()
-    print("=" * 70)
-    print(f"  PLAYER-FAVOURED  (alpha = -0.8, seed = {seed})  — more hiding spots")
-    print("=" * 70)
-    g_p = MapGenerator(width=42, height=20, alpha=-0.8, seed=seed)
-    g_p.generate()
-    g_p.print_map()
-
-    print()
-    print("=" * 70)
-    print("  MAP POOL  (5 maps across alpha range)")
-    print("=" * 70)
-    pool = MapPool(n_maps=5, width=30, height=18, alpha_range=(-1.0, 1.0))
-    pool.generate_all(seed_offset=seed)
-    for m in pool.summary():
-        print(
-            f"  alpha={m['alpha']:+.2f}  "
-            f"vents={m['vent_ratio']:.3f}  "
-            f"hides={m['hide_number']:.3f}  "
-            f"P->exit={m['dist_player_exit']}  "
-            f"A->P={m['dist_alien_player']}"
-        )
-
-    g0.save(f"maps/demo_balanced_seed_{seed}.json")
-    print()
-    print(f"Saved maps/demo_balanced_seed_{seed}.json")
-
-    # Uncomment to open the Pygame window:
-    # visualise_pygame(g0)
 
 
 # ── Visualization ─────────────────────────────────────────────────────────────
@@ -989,4 +952,3 @@ if __name__ == "__main__":
 
         g0.save(f"maps/demo_balanced_seed_{seed}.json")
         print()
-    print(f"Saved maps/demo_balanced_seed_{seed}.json")
