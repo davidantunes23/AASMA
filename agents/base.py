@@ -26,7 +26,7 @@ class Direction(Enum):
 class TeamRole(IntEnum):
     NONE   = 0
     WORKER = 1  # completes mission tiles
-    RUNNER = 2  # stages near exit, escapes when safe
+    EXPLORER = 2  # stages near exit, escapes when safe
     DECOY  = 3  # draws alien away from the team
 
 
@@ -156,4 +156,4 @@ class BaseHumanAgent(BaseAgent):
     def __init__(self, pos: tuple[int, int], direction: Direction = Direction.NORTH, view_length: int = 6) -> None:
         super().__init__(pos, direction, view_length)
         self.exit_open: bool = False           # set by simulation once all missions are completed
-        self.team_role: "TeamRole | None" = None  # assigned role (WORKER/RUNNER/DECOY); None if uncoordinated
+        self.team_role: "TeamRole | None" = None  # assigned role (WORKER/EXPLORER/DECOY); None if uncoordinated

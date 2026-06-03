@@ -59,13 +59,13 @@ AASMA/
 ├── agents/
 │   ├── base.py               — BaseAgent, BaseHumanAgent, BaseAlienAgent, Direction, TeamRole
 │   ├── rule_human.py         — rule-based human (BFS, hiding, radar-reactive, no coordination)
-│   ├── role_human.py         — role-aware human (WORKER / DECOY / RUNNER + coord bus)
+│   ├── role_human.py         — role-aware human (WORKER / DECOY / EXPLORER + coord bus)
 │   ├── coop_role_human.py    — cooperative human (shared belief map + role coordination)
 │   ├── omniscient_human.py   — upper-bound human (full map/missions/exit pre-known)
 │   ├── random_human.py       — random human baseline
 │   ├── rule_alien.py         — rule-based alien (A*, belief map, FSM, vent routing)
 │   ├── random_alien.py       — random alien baseline
-│   ├── role_manager.py       — greedy role assignment helpers (WORKER/DECOY/RUNNER)
+│   ├── role_manager.py       — greedy role assignment helpers (WORKER/DECOY/EXPLORER)
 │   ├── coord_bus.py          — inter-agent coordinate message bus
 │   └── shared_belief.py      — shared belief map for cooperative agents
 ├── map_generator.py          — procedural map generation + PNG visualization
@@ -122,7 +122,7 @@ python run.py --human-class human --human-count 1 --mission-count 0 --no-show
 # Random agents (no mechanics — exact positions, no radar/noise)
 python run.py --demo random --no-show
 
-# Role-based team: WORKER completes missions, DECOY distracts, RUNNER escapes
+# Role-based team: WORKER completes missions, DECOY distracts, EXPLORER escapes
 python run.py --human-class role --no-show
 
 # Cooperative team: shared belief map so all agents explore together
@@ -234,7 +234,7 @@ BaseAgent (ABC)                  agents/base.py         pos:(y,x), direction, st
 │   └── RandomAlienAgent         agents/random_alien.py
 └── BaseHumanAgent                                       + hidden, observe()
     ├── HumanAgent               agents/rule_human.py   BFS navigation, radar-reactive, no coordination
-    ├── RoleHumanAgent           agents/role_human.py   role-aware (WORKER/DECOY/RUNNER) + coord bus
+    ├── RoleHumanAgent           agents/role_human.py   role-aware (WORKER/DECOY/EXPLORER) + coord bus
     │   ├── CoopRoleHumanAgent   agents/coop_role_human.py  shared belief map + role coordination
     │   └── OmniscientHumanAgent agents/omniscient_human.py full map/missions/exit pre-known
     └── RandomHumanAgent         agents/random_human.py
@@ -248,19 +248,19 @@ All agents implement `step(player_pos, heard_pos, step_num) → (y,x)`. Human ag
 |-----------------------|---------------|------------------------|---------------------|----------------------------|
 | `RandomHumanAgent`    | None          | None                   | None                | Baseline / plumbing tests  |
 | `HumanAgent`          | Own FOV       | None                   | None                | Single-agent behaviour     |
-| `RoleHumanAgent`      | Own FOV       | Coord bus (sparse)     | WORKER/DECOY/RUNNER | Team strategy experiments  |
-| `CoopRoleHumanAgent`  | Shared map    | Coord bus + shared map | WORKER/DECOY/RUNNER | Cooperative exploration    |
-| `OmniscientHumanAgent`| Full map      | Coord bus              | WORKER/DECOY/RUNNER | Upper-bound performance    |
+| `RoleHumanAgent`      | Own FOV       | Coord bus (sparse)     | WORKER/DECOY/EXPLORER | Team strategy experiments  |
+| `CoopRoleHumanAgent`  | Shared map    | Coord bus + shared map | WORKER/DECOY/EXPLORER | Cooperative exploration    |
+| `OmniscientHumanAgent`| Full map      | Coord bus              | WORKER/DECOY/EXPLORER | Upper-bound performance    |
 
 ### Role semantics (RoleHumanAgent and subclasses)
 
 - **WORKER** — navigates to nearest uncompleted mission tile and dwells until done.
 - **DECOY** — repositions to draw the alien away from active missions; emits deliberate loud noise when threat is NEAR/FAR.
-- **RUNNER** — stages near the exit; escapes as soon as threat drops to FAR; never completes missions.
+- **EXPLORER** — stages near the exit; escapes as soon as threat drops to FAR; never completes missions.
 
 All roles share a **survival priority**: hiding overrides role tasks when radar threat is CRITICAL or CLOSE. Once all missions complete, all roles converge to exit-seeking.
 
-Role assignment is **event-driven**: missions are discovered/completed, workers are caught, exits unlock. `role_manager.py` provides `assign_worker_greedy`, `assign_decoy_farthest`, `assign_runner_greedy`.
+Role assignment is **event-driven**: missions are discovered/completed, workers are caught, exits unlock. `role_manager.py` provides `assign_worker_greedy`, `assign_decoy_farthest`, `assign_explorer_greedy`.
 
 ### Coordination mechanisms
 
@@ -282,7 +282,7 @@ Vent teleportation triggers only when path savings exceed 4 steps and sound dist
 
 **GIF panels** (default `--style full`):
 
-- **World panel**: map with all agents, FOV cones, radar threat rings, noise ripple, role labels (WORKER/DECOY/RUNNER), and mission/exit markers.
+- **World panel**: map with all agents, FOV cones, radar threat rings, noise ripple, role labels (WORKER/DECOY/EXPLORER), and mission/exit markers.
 - **Per-agent knowledge panels**: what each human or alien believes about the map (explored vs unknown tiles, known mission/exit coords).
 
 **Outcome messages** printed to stdout:

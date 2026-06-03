@@ -80,7 +80,7 @@ BaseAgent (ABC)                  agents/base.py            pos:(y,x), direction,
 │   └── RandomAlienAgent         agents/random_alien.py
 └── BaseHumanAgent                                          + hidden, observe()
     ├── HumanAgent               agents/rule_human.py      BFS navigation, radar-reactive, no coordination
-    ├── RoleHumanAgent           agents/role_human.py      role-aware, coord bus, WORKER/DECOY/RUNNER
+    ├── RoleHumanAgent           agents/role_human.py      role-aware, coord bus, WORKER/DECOY/EXPLORER
     │   ├── CoopRoleHumanAgent   agents/coop_role_human.py shared belief map + role coordination
     │   └── OmniscientHumanAgent agents/omniscient_human.py full map/missions/exit pre-known at start
     └── RandomHumanAgent         agents/random_human.py
@@ -106,12 +106,12 @@ Transition to HUNT-with-hiding only fires if the alien was **already in HUNT** w
 
 `RoleHumanAgent` extends `BaseHumanAgent` with team coordination:
 
-- **TeamRole** enum (in `agents/base.py`): `WORKER`, `DECOY`, `RUNNER`, `NONE`
+- **TeamRole** enum (in `agents/base.py`): `WORKER`, `DECOY`, `EXPLORER`, `NONE`
   - **WORKER**: navigates to nearest uncompleted mission tile
   - **DECOY**: repositions to draw alien away from missions; emits `made_loud_noise` when threat is NEAR/FAR
-  - **RUNNER**: stages near exit and escapes when threat drops to FAR; never completes missions
+  - **EXPLORER**: stages near exit and escapes when threat drops to FAR; never completes missions
 - **Coord bus** (`agents/coord_bus.py`): `CoordMessage` with `CoordType.MISSION`, `MISSION_DONE`, or `EXIT`. Role-aware agents call `flush_outbox()` / `receive_coords()` each step; the simulation relays messages between teammates.
-- **Greedy assignment** (`agents/role_manager.py`): `assign_worker_greedy`, `assign_decoy_farthest`, `assign_runner_greedy` mutate `agent.team_role` on matching agent specs. Assignment is event-driven (mission discovered/completed, worker captured, exit unlocked).
+- **Greedy assignment** (`agents/role_manager.py`): `assign_worker_greedy`, `assign_decoy_farthest`, `assign_explorer_greedy` mutate `agent.team_role` on matching agent specs. Assignment is event-driven (mission discovered/completed, worker captured, exit unlocked).
 
 All roles share the survival priority: hiding overrides role-specific tasks when radar threat is CRITICAL or CLOSE. After all missions complete, all roles converge to exit-seeking.
 
@@ -147,7 +147,7 @@ Key mechanics (active when `enable_mechanics=True`; disabled for `--demo random`
 
 `SimulationFrame` captures per-step: agent positions, team roles, `fov`, `visible_opponent`, radar threat, noise ripple (with `noise_deliberate` flag), shared mission/exit coords, mission completion events.
 
-Render produces a multi-panel GIF: **World** panel + per-agent knowledge panels. `--style world` suppresses knowledge panels. Role labels (WORKER/DECOY/RUNNER) are shown on agent markers in the world panel.
+Render produces a multi-panel GIF: **World** panel + per-agent knowledge panels. `--style world` suppresses knowledge panels. Role labels (WORKER/DECOY/EXPLORER) are shown on agent markers in the world panel.
 
 ### Map generator (`map_generator.py`)
 
