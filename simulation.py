@@ -266,7 +266,7 @@ class GenericMapSimulation:
         self._active_frame: SimulationFrame | None = None
         self._last_role_by_agent_id: dict[int, str] = {}
         # Enforce a minimum dwell time on mission tiles. Default minimum is 20 steps.
-        self.mission_steps_required: int = max(20, int(mission_steps) if mission_steps is not None else 20)
+        self.mission_steps_required: int = int(mission_steps) if mission_steps is not None else 10
         self._mission_dwell_progress: dict[tuple[int, int], int] = {}
 
         # Debug log for role/mission reassignment decisions (opt-in via debug_log=True).
