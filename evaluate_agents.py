@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib
+import matplotlib.lines as mlines
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -207,7 +208,7 @@ def build_simulation(
     alien_spec: AlienSpec,
     p_noise: float = 0.10,
 ) -> GenericMapSimulation:
-    human_start = find_tile(grid, Tile.PLAYER_START)
+    human_start = find_tile(grid, Tile.HUMAN_START)
     alien_start = find_tile(grid, Tile.ALIEN_START)
     human_positions = choose_human_positions(
         grid,
@@ -685,6 +686,20 @@ def plot_survival_curve(
     plt.close(fig)
 
 
+def mission_completion_steps(ep: EpisodeMetrics) -> list[int]:
+    """Return the step at which each mission was completed, in order."""
+    steps = []
+    prev = 0
+    for step, count in enumerate(ep.mission_counts):
+        if count > prev:
+            for _ in range(count - prev):
+                steps.append(step)
+            prev = count
+        if prev >= (ep.mission_counts[-1] if ep.mission_counts else 0):
+            break
+    return steps
+
+
 def plot_capture_escape_timeline(
     episodes: list[EpisodeMetrics],
     human_labels: list[str],
@@ -702,16 +717,26 @@ def plot_capture_escape_timeline(
         for idx in range(len(human_labels))
     ]
 
+    escape_handle = mlines.Line2D([], [], marker="o", color="w", markerfacecolor="#27ae60", markersize=6, label="escaped")
+    capture_handle = mlines.Line2D([], [], marker="x", color="#c0392b", markersize=6, label="captured")
+    timeout_handle = mlines.Line2D([], [], marker="^", color="w", markerfacecolor="#7f8c8d", markersize=6, label="timeout/active")
+    mission_handle = mlines.Line2D([], [], marker="D", color="w", markerfacecolor="#8e44ad", markersize=6, label="mission done")
+
     for ep_idx, ep in enumerate(episodes):
         ax.hlines(ep_idx, 0, ep.steps, color="#d0d0d0", linewidth=0.6)
+
+        # Mission completion markers (drawn first so agent markers sit on top)
+        for ms in mission_completion_steps(ep):
+            ax.scatter(ms, ep_idx, marker="D", s=22, c="#8e44ad", zorder=2, linewidths=0)
+
         for label, offset in zip(human_labels, offsets):
             y = ep_idx + offset
             if ep.escape_steps.get(label) is not None:
-                ax.scatter(ep.escape_steps[label], y, marker="o", s=26, c="#27ae60")
+                ax.scatter(ep.escape_steps[label], y, marker="o", s=26, c="#27ae60", zorder=3)
             elif ep.capture_steps.get(label) is not None:
-                ax.scatter(ep.capture_steps[label], y, marker="x", s=28, c="#c0392b")
+                ax.scatter(ep.capture_steps[label], y, marker="x", s=28, c="#c0392b", zorder=3)
             else:
-                ax.scatter(ep.steps, y, marker="^", s=22, c="#7f8c8d")
+                ax.scatter(ep.steps, y, marker="^", s=22, c="#7f8c8d", zorder=3)
 
     ax.set_title(title)
     ax.set_xlabel("step")
@@ -719,6 +744,12 @@ def plot_capture_escape_timeline(
     ax.set_yticks(range(len(episodes)))
     ax.grid(True, axis="x", alpha=0.25)
     ax.set_xlim(0, max_episode_step)
+    ax.legend(
+        handles=[escape_handle, capture_handle, timeout_handle, mission_handle],
+        loc="lower right",
+        fontsize=7,
+        framealpha=0.7,
+    )
 
     if output:
         os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)

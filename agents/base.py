@@ -123,7 +123,7 @@ class BaseAgent(ABC):
     @abstractmethod
     def step(
         self,
-        player_pos: tuple[int, int],
+        human_pos: tuple[int, int],
         heard_pos: tuple[int, int] | None = None,
         step_num: int = 0,
     ) -> tuple[int, int]:

@@ -110,11 +110,11 @@ class CoopRoleHumanAgent(RoleHumanAgent):
 
     def step(
         self,
-        _player_pos: tuple[int, int],
+        _human_pos: tuple[int, int],
         _heard_pos: tuple[int, int] | None = None,
         _step_num: int = 0,
     ) -> tuple[int, int]:
-        result = super().step(_player_pos, _heard_pos, _step_num)
+        result = super().step(_human_pos, _heard_pos, _step_num)
         if self.shared_map is not None:
             self.shared_map.set_position(self.agent_id, result)  # keep registry current after move
         return result

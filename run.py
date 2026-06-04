@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
                         help="Write role/mission reassignment debug log to output/logs/")
     parser.add_argument("--human-view", type=int, default=6, help="Human observation radius (default: 6)")
     parser.add_argument("--alien-fov", type=int, default=6, help="Alien FOV radius (default: 6)")
-    parser.add_argument("--noise-radius", type=int, default=2, help="Max cell offset for player noise (default: 2)")
+    parser.add_argument("--noise-radius", type=int, default=2, help="Max cell offset for human noise (default: 2)")
     parser.add_argument("--noise-prob", type=float, default=0.10, help="Probability of emitting noise each step (default: 0.10)")
     parser.add_argument("--mission-steps", type=int, default=10,
                         help="Steps required to complete each mission tile (default: 10)")
@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--random-map", action="store_true",
                         help="Use a random seed for map/agent generation")
     parser.add_argument("--min-start-distance", type=int, default=0,
-                        help="Minimum topology distance between player and alien spawn tiles (default: 0)")
+                        help="Minimum topology distance between human and alien spawn tiles (default: 0)")
     return parser.parse_args()
 
 
@@ -113,7 +113,7 @@ def build_agents(
     alien_count: int = 1,
     alien_class: str = "alien",
 ):
-    human_start = find_tile(grid, Tile.PLAYER_START)
+    human_start = find_tile(grid, Tile.HUMAN_START)
     alien_start = find_tile(grid, Tile.ALIEN_START)
 
     if min_start_distance > 0:
@@ -190,7 +190,7 @@ def main():
     )
     grid = generator.generate()
 
-    player_start = find_tile(grid, Tile.PLAYER_START)
+    human_start = find_tile(grid, Tile.HUMAN_START)
     alien_start = find_tile(grid, Tile.ALIEN_START)
 
     agents = build_agents(

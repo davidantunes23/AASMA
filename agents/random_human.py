@@ -51,7 +51,7 @@ class RandomHumanAgent(BaseHumanAgent):
 
     # ── Step ──────────────────────────────────────────────────────────────────
 
-    def step(self, _player_pos: tuple, _heard_pos: tuple = None, _step_num: int = 0) -> tuple:
+    def step(self, _human_pos: tuple, _heard_pos: tuple = None, _step_num: int = 0) -> tuple:
         if self._known_map is None:
             return self.pos  # no observation yet — stay put
 

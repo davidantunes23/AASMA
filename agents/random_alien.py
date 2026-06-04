@@ -19,7 +19,7 @@ class RandomAlienAgent(BaseAlienAgent):
     or teleport to a previously seen vent (if currently standing on one).
     Knowledge of the map is built incrementally from cone observations — the agent
     can only move to tiles it has already seen.
-    Used as a lower-bound baseline — no pursuit, no memory of players.
+    Used as a lower-bound baseline — no pursuit, no memory of humans.
     """
 
     def __init__(self, pos: tuple, view_length: int = 6, rng: Optional[random.Random] = None):
@@ -50,7 +50,7 @@ class RandomAlienAgent(BaseAlienAgent):
 
     # ── Step ──────────────────────────────────────────────────────────────────
 
-    def step(self, _player_pos: tuple, _heard_pos: tuple = None, _step_num: int = 0) -> tuple:
+    def step(self, _human_pos: tuple, _heard_pos: tuple = None, _step_num: int = 0) -> tuple:
         if self._known_map is None:
             return self.pos  # no observation yet — stay put
 

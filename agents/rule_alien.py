@@ -2,14 +2,14 @@
 
 States:
   SEARCH      — explores unknown frontiers; falls back to patrol waypoints when fully explored.
-  INVESTIGATE — moves to the last known or last heard player position.
-  HUNT        — pursues a visible player at double speed (2 cells/step).
+  INVESTIGATE — moves to the last known or last heard human position.
+  HUNT        — pursues a visible human at double speed (2 cells/step).
 
 Transitions:
-  Any state   → HUNT        when player is visible.
-  HUNT        → HUNT        when player ducks into a HIDE tile (alien was already chasing).
-  HUNT        → INVESTIGATE when player disappears and a recent sound cue exists.
-  HUNT        → SEARCH      when player disappears and no recent sound.
+  Any state   → HUNT        when human is visible.
+  HUNT        → HUNT        when human ducks into a HIDE tile (alien was already chasing).
+  HUNT        → INVESTIGATE when human disappears and a recent sound cue exists.
+  HUNT        → SEARCH      when human disappears and no recent sound.
   INVESTIGATE → SEARCH      when the alien reaches the last known position and the area
                              is ≥70% explored, or the sound cue expires.
 
@@ -30,14 +30,14 @@ from agents.base import (
 from map_generator import Tile
 
 UNKNOWN     = -1   # cell not yet observed
-PLAYER_SEEN = -2   # special marker written to knowledge map when a player was spotted here
+HUMAN_SEEN = -2   # special marker written to knowledge map when a human was spotted here
 
 # Tiles the alien can normally walk on (HIDE excluded — aliens cannot enter hiding spots).
-PASSABLE_ALIEN      = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.PLAYER_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
-# Extended passable set used only when the alien confirmed the player is hiding in a spot.
-PASSABLE_ALIEN_RUSH = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.HIDE), int(Tile.PLAYER_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
-# Tiles a player can walk on (used for vent teleport savings estimation).
-PASSABLE_PLAYER     = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.HIDE), int(Tile.PLAYER_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
+PASSABLE_ALIEN      = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.HUMAN_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
+# Extended passable set used only when the alien confirmed the human is hiding in a spot.
+PASSABLE_ALIEN_RUSH = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.HIDE), int(Tile.HUMAN_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
+# Tiles a human can walk on (used for vent teleport savings estimation).
+PASSABLE_HUMAN     = {int(Tile.FLOOR), int(Tile.VENT), int(Tile.HIDE), int(Tile.HUMAN_START), int(Tile.ALIEN_START), int(Tile.EXIT), int(Tile.MISSION)}
 
 # Cardinal directions as (dy, dx) offsets on a (y, x) grid.
 DIRS = [(0, 1), (0, -1), (1, 0), (-1, 0)]
@@ -94,8 +94,8 @@ def astar(grid, start, goal, passable):
             if not (0 <= nx < W and 0 <= ny < H):
                 continue
             cell = grid[ny, nx]
-            if cell == PLAYER_SEEN:
-                cell = int(Tile.FLOOR)  # PLAYER_SEEN overwrites the tile ID; restore for pathfinding
+            if cell == HUMAN_SEEN:
+                cell = int(Tile.FLOOR)  # HUMAN_SEEN overwrites the tile ID; restore for pathfinding
             if cell not in passable:
                 continue
             ng = g[cur] + 1
@@ -107,7 +107,7 @@ def astar(grid, start, goal, passable):
 
 
 class KnowledgeMap:
-    """Incremental map of observed tiles and player sightings. All positions (y, x).
+    """Incremental map of observed tiles and human sightings. All positions (y, x).
 
     Starts fully unknown; cells are filled in as the alien's cone FOV sweeps over them.
     """
@@ -117,17 +117,17 @@ class KnowledgeMap:
         self.knowledge = np.full((H, W), UNKNOWN, dtype=np.int16)  # observed tile IDs
         self.seen_vents: set[tuple[int, int]] = set()               # vent positions discovered so far
 
-    def update_from_observation(self, visible_cells, grid_map, player_pos, player_visible, player_hiding):
+    def update_from_observation(self, visible_cells, grid_map, human_pos, human_visible, human_hiding):
         """Write observed tile IDs into the knowledge array and register any vents seen."""
         for vy, vx in visible_cells:  # (y, x) tuples
             if 0 <= vy < grid_map.shape[0] and 0 <= vx < grid_map.shape[1]:
                 self.knowledge[vy, vx] = int(grid_map[vy, vx])
                 if grid_map[vy, vx] == int(Tile.VENT):
                     self.seen_vents.add((vy, vx))
-        if player_visible and not player_hiding and player_pos:
-            py, px = player_pos  # (y, x)
+        if human_visible and not human_hiding and human_pos:
+            py, px = human_pos  # (y, x)
             if 0 <= py < grid_map.shape[0] and 0 <= px < grid_map.shape[1]:
-                self.knowledge[py, px] = PLAYER_SEEN  # mark last known player cell
+                self.knowledge[py, px] = HUMAN_SEEN  # mark last known human cell
 
     def get_unknown_frontier(self):
         """Return observed passable cells that border at least one unknown cell.
@@ -138,7 +138,7 @@ class KnowledgeMap:
         for y in range(H):
             for x in range(W):
                 cell = self.knowledge[y, x]
-                if cell == PLAYER_SEEN:
+                if cell == HUMAN_SEEN:
                     cell = int(Tile.FLOOR)
                 if cell == UNKNOWN or cell not in PASSABLE_ALIEN:
                     continue
@@ -153,15 +153,15 @@ class KnowledgeMap:
     def get_seen_vents(self):
         return list(self.seen_vents)
 
-    def get_previously_seen_player_area(self):
-        """Return all cells marked PLAYER_SEEN — used as SEARCH fallback targets."""
+    def get_previously_seen_human_area(self):
+        """Return all cells marked HUMAN_SEEN — used as SEARCH fallback targets."""
         H, W = self.knowledge.shape
-        player_areas = []
+        human_areas = []
         for y in range(H):
             for x in range(W):
-                if self.knowledge[y, x] == PLAYER_SEEN:
-                    player_areas.append((y, x))
-        return player_areas
+                if self.knowledge[y, x] == HUMAN_SEEN:
+                    human_areas.append((y, x))
+        return human_areas
 
     def get_copy(self):
         return self.knowledge.copy()
@@ -218,7 +218,7 @@ class AlienAgent(BaseAlienAgent):
         self.state             = AlienState.SEARCH
         self.knowledge         = None  # initialised lazily on first observe() call
         self.last_known_pos    = None
-        self.player_known_hiding = False
+        self.human_known_hiding = False
         self.last_heard_pos    = None
         self.steps_since_heard = 0
         self.path              = []
@@ -229,9 +229,9 @@ class AlienAgent(BaseAlienAgent):
         self.history           = []
         self.vent_teleport_used  = False
         # self._rl_action_override = None  # reserved for RL training — not used in rule-based play
-        self._player_seen      = False
-        self._player_hiding    = False
-        self._player_pos       = None
+        self._human_seen      = False
+        self._human_hiding    = False
+        self._human_pos       = None
 
     # ── Observation ───────────────────────────────────────────────────────────
 
@@ -240,15 +240,15 @@ class AlienAgent(BaseAlienAgent):
 
         obs: full-grid-shaped array with UNKNOWN=-1 outside FOV, true tile IDs inside.
         opponent_positions: list of (pos, hidden) tuples for alive human agents, used
-            to determine whether a visible cell contains a player or an empty HIDE tile.
+            to determine whether a visible cell contains a human or an empty HIDE tile.
         """
         if self.knowledge is None:
             self.knowledge = KnowledgeMap(obs.shape)
         visible = {(int(y), int(x)) for y, x in zip(*np.where(obs != UNKNOWN))}
 
-        self._player_seen    = False
-        self._player_hiding  = False
-        self._player_pos     = None
+        self._human_seen    = False
+        self._human_hiding  = False
+        self._human_pos     = None
 
         if opponent_positions:
             # Process nearest opponent first so the alien always reacts to the
@@ -258,27 +258,27 @@ class AlienAgent(BaseAlienAgent):
                 py, px = pos
                 if (py, px) in visible:
                     if obs[py, px] == int(Tile.HIDE):
-                        self._player_hiding = True   # player is inside a hide tile
+                        self._human_hiding = True   # human is inside a hide tile
                     else:
-                        self._player_seen = True
-                    self._player_pos = pos
+                        self._human_seen = True
+                    self._human_pos = pos
                     break  # stop at nearest visible opponent
 
         self.knowledge.update_from_observation(
-            visible, obs, self._player_pos,
-            self._player_seen, self._player_hiding,
+            visible, obs, self._human_pos,
+            self._human_seen, self._human_hiding,
         )
 
     # ── Step ──────────────────────────────────────────────────────────────────
 
-    def step(self, player_pos: tuple, heard_pos: tuple = None, step_num: int = 0) -> tuple:
-        """Execute one step. player_pos and heard_pos are (y, x)."""
+    def step(self, human_pos: tuple, heard_pos: tuple = None, step_num: int = 0) -> tuple:
+        """Execute one step. human_pos and heard_pos are (y, x)."""
         if heard_pos is None:
-            heard_pos = player_pos
+            heard_pos = human_pos
 
-        # A sound cue arrives when heard_pos differs from the true player position
+        # A sound cue arrives when heard_pos differs from the true human position
         # (the simulation jitters the position by noise_radius cells).
-        sound_detected = heard_pos != player_pos
+        sound_detected = heard_pos != human_pos
         if sound_detected:
             self.last_heard_pos      = heard_pos
             self.steps_since_heard   = 0
@@ -290,16 +290,16 @@ class AlienAgent(BaseAlienAgent):
                 self.last_heard_pos = None  # sound cue has gone stale
 
         # Visual perception state set by observe(), called by the simulation before step().
-        player_seen   = self._player_seen
-        player_hiding = self._player_hiding
+        human_seen   = self._human_seen
+        human_hiding = self._human_hiding
         # observe() used pre-movement positions; refresh with the simulation's nearest-target
-        # so pursuit is accurate on the same tick the player was spotted.
-        if (player_seen or player_hiding) and player_pos is not None:
-            self._player_pos = player_pos
+        # so pursuit is accurate on the same tick the human was spotted.
+        if (human_seen or human_hiding) and human_pos is not None:
+            self._human_pos = human_pos
 
         # STATE TRANSITION
         prev = self.state
-        self._transition(player_seen, player_hiding, self._player_pos)
+        self._transition(human_seen, human_hiding, self._human_pos)
         if self.state != prev:
             self.steps_in_state = 0
             self.path = []
@@ -336,10 +336,10 @@ class AlienAgent(BaseAlienAgent):
             "state":             self.state.name,
             "pos":               self.pos,
             "direction":         self.direction.name,
-            "player_seen":       player_seen,
-            "player_hiding":     player_hiding,
+            "human_seen":       human_seen,
+            "human_hiding":     human_hiding,
             "speed":             steps,
-            "dist_to_player":    heuristic(self.pos, player_pos),
+            "dist_to_human":    heuristic(self.pos, human_pos),
             "heard_pos":         heard_pos if sound_detected else None,
             "pursuing_sound":    self.last_heard_pos is not None,
             "vent_teleport_used": self.vent_teleport_used,
@@ -365,28 +365,28 @@ class AlienAgent(BaseAlienAgent):
 
     def _chase_passable(self) -> set:
         """Return the passable tile set for movement toward a known target.
-        Switches to RUSH (includes HIDE) only when the player was confirmed hiding.
+        Switches to RUSH (includes HIDE) only when the human was confirmed hiding.
         """
-        if self.player_known_hiding and self.state in (AlienState.HUNT, AlienState.INVESTIGATE):
+        if self.human_known_hiding and self.state in (AlienState.HUNT, AlienState.INVESTIGATE):
             return PASSABLE_ALIEN_RUSH
         return PASSABLE_ALIEN
 
-    def _transition(self, player_seen: bool, player_hiding: bool, player_pos: tuple):
-        if player_seen:
-            self.last_known_pos      = player_pos
-            self.player_known_hiding = False
+    def _transition(self, human_seen: bool, human_hiding: bool, human_pos: tuple):
+        if human_seen:
+            self.last_known_pos      = human_pos
+            self.human_known_hiding = False
             self.state               = AlienState.HUNT
-        elif player_hiding and self.state == AlienState.HUNT:
-            # Player ducked into a hide spot while the alien was already chasing them.
+        elif human_hiding and self.state == AlienState.HUNT:
+            # Human ducked into a hide spot while the alien was already chasing them.
             # Only rush in if the alien was already in HUNT — a wandering alien that
             # merely sees a HIDE tile has no reason to know anyone is inside.
-            self.last_known_pos      = player_pos
-            self.player_known_hiding = True
+            self.last_known_pos      = human_pos
+            self.human_known_hiding = True
             self.path                = []
             self.steps_no_replan     = self.replan_every
             # state stays HUNT
         elif self.state == AlienState.HUNT:
-            self.player_known_hiding = False
+            self.human_known_hiding = False
             if self.last_heard_pos is None or self.steps_since_heard > 5:
                 self.state = AlienState.SEARCH
             else:
@@ -394,7 +394,7 @@ class AlienAgent(BaseAlienAgent):
         elif self.state == AlienState.INVESTIGATE:
             if self.last_known_pos and heuristic(self.pos, self.last_known_pos) <= 1:
                 # Arrived at last known position — if the area is well explored,
-                # the player is clearly not nearby; give up and resume SEARCH.
+                # the human is clearly not nearby; give up and resume SEARCH.
                 if self._get_explored_ratio(self.last_known_pos, 4) > 0.7:
                     self.state = AlienState.SEARCH
             elif self.last_heard_pos is None or self.steps_since_heard > 5:
@@ -470,7 +470,7 @@ class AlienAgent(BaseAlienAgent):
 
     def _move_one(self) -> tuple:
         # Always replan in HUNT so the 2-cell-per-step movement never overshoots
-        # the player using a stale path from the previous step.
+        # the human using a stale path from the previous step.
         if not self.path or self.steps_no_replan >= self.replan_every or self.state == AlienState.HUNT:
             self.path            = self._plan_path()
             self.steps_no_replan = 0
@@ -488,6 +488,8 @@ class AlienAgent(BaseAlienAgent):
                 greedy = self._greedy_step_toward(self.last_known_pos, self._chase_passable())
                 if greedy is not None:
                     new_pos = greedy
+                else:
+                    self.state = AlienState.SEARCH
             elif self.state == AlienState.SEARCH:
                 # Check whether the current cell is a frontier (has an unknown neighbour).
                 km = self.knowledge.knowledge
@@ -545,7 +547,7 @@ class AlienAgent(BaseAlienAgent):
             path = astar(km, self.pos, self.last_known_pos, self._chase_passable())
             if not path:
                 # last_known_pos not yet in the known map — head to the nearest
-                # frontier that is closest to where the player was last seen.
+                # frontier that is closest to where the human was last seen.
                 frontiers = [f for f in self.knowledge.get_unknown_frontier() if f != self.pos]
                 if frontiers:
                     goal = min(frontiers, key=lambda f: heuristic(f, self.last_known_pos))
@@ -577,11 +579,11 @@ class AlienAgent(BaseAlienAgent):
             if self.last_known_pos is None:
                 goal = self.pos
             elif km[self.last_known_pos[0], self.last_known_pos[1]] == int(Tile.HIDE):
-                if self.player_known_hiding:
-                    # Confirmed: player was seen entering — rush in through HIDE tiles.
+                if self.human_known_hiding:
+                    # Confirmed: human was seen entering — rush in through HIDE tiles.
                     return astar(km, self.pos, self.last_known_pos, PASSABLE_ALIEN_RUSH)
                 else:
-                    # Suspected: last known pos is a hide tile but player wasn't seen
+                    # Suspected: last known pos is a hide tile but human wasn't seen
                     # entering — patrol adjacent cells instead of freezing at the door.
                     hy, hx = self.last_known_pos
                     H, W   = km.shape
@@ -603,7 +605,7 @@ class AlienAgent(BaseAlienAgent):
             elif self.last_heard_pos is not None and self.steps_since_heard <= 10:
                 goal = self.last_heard_pos
             else:
-                prev_areas = self.knowledge.get_previously_seen_player_area()
+                prev_areas = self.knowledge.get_previously_seen_human_area()
                 if prev_areas:
                     goal = min(prev_areas, key=lambda p: heuristic(self.pos, p))
                 else:

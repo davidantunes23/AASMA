@@ -182,7 +182,7 @@ python run.py --human-class role --style world --no-show
 # Alien-favoured map (more vents)
 python run.py --human-class role --alpha 0.8 --no-show
 
-# Player-favoured map (more hiding spots), longer episode
+# Human-favoured map (more hiding spots), longer episode
 python run.py --human-class role --alpha -0.5 --max-steps 500 --no-show
 
 # Ensure a minimum safe starting distance
@@ -252,7 +252,7 @@ Maps are procedurally generated with a single `alpha` parameter:
 
 | alpha | Effect                                          |
 |-------|-------------------------------------------------|
-| `< 0` | Player-favoured: more hiding spots, fewer vents |
+| `< 0` | Human-favoured: more hiding spots, fewer vents |
 | `= 0` | Balanced                                        |
 | `> 0` | Alien-favoured: more vents, fewer hiding spots  |
 
@@ -264,7 +264,7 @@ Maps are procedurally generated with a single `alpha` parameter:
 | FLOOR        | 1  | Passable by all                                |
 | VENT         | 2  | Alien teleport network                         |
 | HIDE         | 3  | Human hiding spot; blocks alien FOV            |
-| PLAYER_START | 4  | Human spawn point                              |
+| HUMAN_START | 4  | Human spawn point                              |
 | ALIEN_START  | 5  | Alien spawn point                              |
 | EXIT         | 6  | Human goal (locked until all missions done)    |
 | MISSION      | 7  | Mission tile (accumulate 10 steps to complete) |
@@ -296,7 +296,7 @@ BaseAgent (ABC)                  agents/base.py         pos:(y,x), direction, st
     └── RandomHumanAgent         agents/random_human.py
 ```
 
-All agents implement `step(player_pos, heard_pos, step_num) → (y,x)`. Human agents additionally expose `observe(obs, radar_threat, radar_dist)` called before `step()` each turn.
+All agents implement `step(human_pos, heard_pos, step_num) → (y,x)`. Human agents additionally expose `observe(obs, radar_threat, radar_dist)` called before `step()` each turn.
 
 ### Human agent comparison
 

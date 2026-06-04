@@ -5,15 +5,15 @@ map_generator.py  —  Alien Isolation-inspired 2D grid map generator.
 Tile legend:
     0 WALL          impassable
     1 FLOOR         passable by both agents
-    2 VENT          alien-only shortcut (passable for alien, blocked for player)
-    3 HIDE          hiding spot (player can hide; blocks alien LOS)
-    4 PLAYER_START  player spawn
+    2 VENT          alien-only shortcut (passable for alien, blocked for human)
+    3 HIDE          hiding spot (human can hide; blocks alien LOS)
+    4 HUMAN_START  human spawn
     5 ALIEN_START   alien spawn
-    6 EXIT          player goal
+    6 EXIT          human goal
     7 MISSION       intermediate objective
 
 Alpha parameter  alpha in [-1, +1]:
-    alpha < 0  -> player-favoured  (more hiding spots per room, fewer vents)
+    alpha < 0  -> human-favoured  (more hiding spots per room, fewer vents)
     alpha = 0  -> balanced
     alpha > 0  -> alien-favoured   (more vents, fewer hiding spots per room)
 """
@@ -37,7 +37,7 @@ class Tile(IntEnum):
     FLOOR = 1
     VENT = 2
     HIDE = 3
-    PLAYER_START = 4
+    HUMAN_START = 4
     ALIEN_START = 5
     EXIT = 6
     MISSION = 7
@@ -48,7 +48,7 @@ TILE_CHAR = {
     Tile.FLOOR: "  ",
     Tile.VENT: "VV",
     Tile.HIDE: "HH",
-    Tile.PLAYER_START: "PP",
+    Tile.HUMAN_START: "PP",
     Tile.ALIEN_START: "AA",
     Tile.EXIT: "EE",
     Tile.MISSION: "MM",
@@ -59,7 +59,7 @@ TILE_NAME = {
     Tile.FLOOR: "floor",
     Tile.VENT: "vent",
     Tile.HIDE: "hide",
-    Tile.PLAYER_START: "player",
+    Tile.HUMAN_START: "human",
     Tile.ALIEN_START: "alien",
     Tile.EXIT: "exit",
     Tile.MISSION: "mission",
@@ -119,7 +119,7 @@ class MapGenerator:
 
         self.grid: np.ndarray | None = None
         self.rooms: list[tuple] = []
-        self.player_pos: tuple | None = None
+        self.human_pos: tuple | None = None
         self.alien_pos: tuple | None = None
         self.exit_pos: tuple | None = None
         self.metadata: dict = {}
@@ -129,8 +129,8 @@ class MapGenerator:
         self,
         alpha: float | None = None,
         seed: int | None = None,
-        target_player_exit_dist: int | None = None,
-        target_alien_player_dist: int | None = None,
+        target_human_exit_dist: int | None = None,
+        target_alien_human_dist: int | None = None,
         tries: int = 24,
     ) -> tuple[np.ndarray, dict]:
         """
@@ -140,8 +140,8 @@ class MapGenerator:
         Args:
             alpha: override alpha; if None, use self.alpha
             seed: base seed; if None, use self.seed
-            target_player_exit_dist: desired player→exit path length
-            target_alien_player_dist: desired alien→player path length
+            target_human_exit_dist: desired human→exit path length
+            target_alien_human_dist: desired alien→human path length
             tries: number of candidate maps to sample
 
         Returns:
@@ -164,13 +164,13 @@ class MapGenerator:
                 max_rooms=self.max_rooms,
                 max_hides_per_room=self.max_hides_per_room,
                 mission_count=self.mission_count,
-                target_player_exit_dist=target_player_exit_dist,
-                target_alien_player_dist=target_alien_player_dist,
+                target_human_exit_dist=target_human_exit_dist,
+                target_alien_human_dist=target_alien_human_dist,
             )
             cand.generate()
             score = cand._bias_score(
-                target_player_exit_dist=target_player_exit_dist,
-                target_alien_player_dist=target_alien_player_dist,
+                target_human_exit_dist=target_human_exit_dist,
+                target_alien_human_dist=target_alien_human_dist,
             )
             if score < best_score:
                 best_score = score
@@ -182,16 +182,16 @@ class MapGenerator:
 
     def _bias_score(
         self,
-        target_player_exit_dist: int | None,
-        target_alien_player_dist: int | None,
+        target_human_exit_dist: int | None,
+        target_alien_human_dist: int | None,
     ) -> float:
         """Score candidate map relative to ER geometry targets (lower is better)."""
         m = self.metadata
         score = 0.0
-        if target_player_exit_dist is not None and m.get("dist_player_exit") is not None:
-            score += abs(m["dist_player_exit"] - target_player_exit_dist)
-        if target_alien_player_dist is not None and m.get("dist_alien_player") is not None:
-            score += abs(m["dist_alien_player"] - target_alien_player_dist)
+        if target_human_exit_dist is not None and m.get("dist_human_exit") is not None:
+            score += abs(m["dist_human_exit"] - target_human_exit_dist)
+        if target_alien_human_dist is not None and m.get("dist_alien_human") is not None:
+            score += abs(m["dist_alien_human"] - target_alien_human_dist)
         return score
 
     # ── Tile behaviour from alpha ───────────────────────────────────────────────
@@ -205,7 +205,7 @@ class MapGenerator:
         Probability of placing k hiding spots per room for k in
         [0, room_max_hides].
 
-        alpha < 0 shifts probability toward higher k (player-favoured).
+        alpha < 0 shifts probability toward higher k (human-favoured).
         alpha > 0 shifts probability toward lower k (alien-favoured).
         alpha = 0 produces a uniform distribution.
         """
@@ -265,9 +265,9 @@ class MapGenerator:
             f"hides={m.get('hide_number', 0):.3f}"
         )
         print(
-            f"  dist P->exit={m.get('dist_player_exit')}  "
+            f"  dist P->exit={m.get('dist_human_exit')}  "
             f"dist A->exit={m.get('dist_alien_exit')}  "
-            f"dist A->P={m.get('dist_alien_player')}"
+            f"dist A->P={m.get('dist_alien_human')}"
         )
 
     def to_dict(self) -> dict:
@@ -294,7 +294,7 @@ class MapGenerator:
         )
         gen.grid = np.array(data["grid"], dtype=np.int8)
         gen.metadata = m
-        gen.player_pos = tuple(m["player_start"])
+        gen.human_pos = tuple(m["human_start"])
         gen.alien_pos  = tuple(m["alien_start"])
         gen.exit_pos   = tuple(m["exit_pos"])
         return gen
@@ -359,12 +359,12 @@ class MapGenerator:
         centres = [self._room_centre(r) for r in self.rooms]
 
         px, py = centres[0]
-        ax, ay = centres[-1]   # alien: last room (farthest from player start)
+        ax, ay = centres[-1]   # alien: last room (farthest from human start)
         mid = len(centres) // 2
         ex, ey = centres[mid]  # exit: middle room
 
-        self.grid[py, px] = Tile.PLAYER_START
-        self.player_pos = (px, py)
+        self.grid[py, px] = Tile.HUMAN_START
+        self.human_pos = (px, py)
         self.grid[ay, ax] = Tile.ALIEN_START
         self.alien_pos = (ax, ay)
         self.grid[ey, ex] = Tile.EXIT
@@ -498,14 +498,14 @@ class MapGenerator:
             Tile.FLOOR,
             Tile.VENT,
             Tile.HIDE,
-            Tile.PLAYER_START,
+            Tile.HUMAN_START,
             Tile.ALIEN_START,
             Tile.EXIT,
             Tile.MISSION,
         }
-        d_pe = self._bfs_distance(self.player_pos, self.exit_pos, passable)
+        d_pe = self._bfs_distance(self.human_pos, self.exit_pos, passable)
         d_ae = self._bfs_distance(self.alien_pos, self.exit_pos, passable)
-        d_ap = self._bfs_distance(self.alien_pos, self.player_pos, passable)
+        d_ap = self._bfs_distance(self.alien_pos, self.human_pos, passable)
 
         open_tiles = sum(counts.get(t, 0) for t in passable)
 
@@ -528,12 +528,12 @@ class MapGenerator:
             else 0.0,
             "hide_number": counts.get(Tile.HIDE, 0),
             "mission_number": counts.get(Tile.MISSION, 0),
-            "player_start": list(self.player_pos),
+            "human_start": list(self.human_pos),
             "alien_start": list(self.alien_pos),
             "exit_pos": list(self.exit_pos),
-            "dist_player_exit": d_pe,
+            "dist_human_exit": d_pe,
             "dist_alien_exit": d_ae,
-            "dist_alien_player": d_ap,
+            "dist_alien_human": d_ap,
             "computed_alpha": round(
                 (counts.get(Tile.VENT, 0) - counts.get(Tile.HIDE, 0)) / max(total, 1),
                 4,
@@ -604,7 +604,7 @@ def visualise_pygame(gen: MapGenerator, cell: int = 24):
         Tile.FLOOR: (55, 55, 75),
         Tile.VENT: (170, 90, 210),
         Tile.HIDE: (60, 160, 80),
-        Tile.PLAYER_START: (50, 150, 230),
+        Tile.HUMAN_START: (50, 150, 230),
         Tile.ALIEN_START: (210, 50, 50),
         Tile.EXIT: (230, 190, 40),
         Tile.MISSION: (26, 188, 156),
@@ -612,7 +612,7 @@ def visualise_pygame(gen: MapGenerator, cell: int = 24):
     LABELS = {
         Tile.VENT: "V",
         Tile.HIDE: "H",
-        Tile.PLAYER_START: "P",
+        Tile.HUMAN_START: "P",
         Tile.ALIEN_START: "A",
         Tile.EXIT: "E",
         Tile.MISSION: "M",
@@ -658,7 +658,7 @@ TILE_COLORS = {
     Tile.FLOOR: "#2e2e4a",
     Tile.VENT: "#9b59b6",
     Tile.HIDE: "#27ae60",
-    Tile.PLAYER_START: "#2980b9",
+    Tile.HUMAN_START: "#2980b9",
     Tile.ALIEN_START: "#c0392b",
     Tile.EXIT: "#f39c12",
     Tile.MISSION: "#1abc9c",
@@ -669,7 +669,7 @@ TILE_LABELS = {
     Tile.FLOOR: "Floor",
     Tile.VENT: "Vent (alien shortcut)",
     Tile.HIDE: "Hiding Spot",
-    Tile.PLAYER_START: "Player Start",
+    Tile.HUMAN_START: "Human Start",
     Tile.ALIEN_START: "Alien Start",
     Tile.EXIT: "Exit",
     Tile.MISSION: "Mission",
@@ -678,7 +678,7 @@ TILE_LABELS = {
 TILE_SYMBOLS = {
     Tile.VENT: "V",
     Tile.HIDE: "H",
-    Tile.PLAYER_START: "P",
+    Tile.HUMAN_START: "P",
     Tile.ALIEN_START: "A",
     Tile.EXIT: "E",
     Tile.MISSION: "M",
@@ -729,9 +729,9 @@ def visualise_map(
     auto_title = f"Map  |  seed={gen.seed}  alpha={alpha_sign}{gen.alpha:.2f}  rooms={m.get('n_rooms', '?')}  {W}×{H}"
     if show_distances:
         sub = (
-            f"P→exit: {m.get('dist_player_exit')} steps   "
+            f"P→exit: {m.get('dist_human_exit')} steps   "
             f"A→exit: {m.get('dist_alien_exit')} steps   "
-            f"A→P: {m.get('dist_alien_player')} steps   "
+            f"A→P: {m.get('dist_alien_human')} steps   "
             f"vents: {m.get('vent_ratio', 0):.1%}   "
             f"hides: {m.get('hide_number', 0)}"
         )
@@ -753,7 +753,7 @@ def visualise_map(
             Tile.FLOOR,
             Tile.VENT,
             Tile.HIDE,
-            Tile.PLAYER_START,
+            Tile.HUMAN_START,
             Tile.ALIEN_START,
             Tile.EXIT,
             Tile.MISSION,
@@ -803,7 +803,7 @@ def visualise_alpha_comparison(
                    Tile.FLOOR,
                    Tile.VENT,
                    Tile.HIDE,
-                   Tile.PLAYER_START,
+                   Tile.HUMAN_START,
                    Tile.ALIEN_START,
                    Tile.EXIT,
                    Tile.MISSION,
@@ -848,7 +848,7 @@ def visualise_current_maps_comparison(
                    Tile.FLOOR,
                    Tile.VENT,
                    Tile.HIDE,
-                   Tile.PLAYER_START,
+                   Tile.HUMAN_START,
                    Tile.ALIEN_START,
                    Tile.EXIT,
                    Tile.MISSION,
@@ -885,13 +885,13 @@ def run_demo(seed: int | None = None):
     gen_alien.generate()
     visualise_map(gen_alien, save_path="output/map_alien_favoured.png")
 
-    gen_player = MapGenerator(width=60, height=40, alpha=-0.8, seed=seed)
-    gen_player.generate()
-    visualise_map(gen_player, save_path="output/map_player_favoured.png")
+    gen_human = MapGenerator(width=60, height=40, alpha=-0.8, seed=seed)
+    gen_human.generate()
+    visualise_map(gen_human, save_path="output/map_human_favoured.png")
 
     visualise_current_maps_comparison(
-        [gen_balanced, gen_alien, gen_player],
-        labels=["balanced", "alien-favoured", "player-favoured"],
+        [gen_balanced, gen_alien, gen_human],
+        labels=["balanced", "alien-favoured", "human-favoured"],
         save_path="output/current_maps_comparison.png",
     )
     render_saved_map("maps/demo_balanced.json", "output/map_balanced_from_json.png")
@@ -935,7 +935,7 @@ if __name__ == "__main__":
 
         print()
         print("=" * 70)
-        print(f"  PLAYER-FAVOURED  (alpha = -0.8, seed = {seed})  [{args.width}x{args.height}]")
+        print(f"  HUMAN-FAVOURED  (alpha = -0.8, seed = {seed})  [{args.width}x{args.height}]")
         print("=" * 70)
         g_p = MapGenerator(width=args.width, height=args.height, alpha=-0.8, seed=seed)
         g_p.generate()

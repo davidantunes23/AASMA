@@ -99,7 +99,7 @@ class RoleHumanAgent(BaseHumanAgent):
 
     def step(
         self,
-        _player_pos: tuple[int, int],
+        _human_pos: tuple[int, int],
         _heard_pos:  tuple[int, int] | None = None,
         _step_num:   int = 0,
     ) -> tuple[int, int]:

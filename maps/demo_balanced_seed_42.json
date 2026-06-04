@@ -700,7 +700,7 @@
       "floor": 244,
       "vent": 10,
       "hide": 11,
-      "player": 1,
+      "human": 1,
       "alien": 1,
       "exit": 1
     },
@@ -708,7 +708,7 @@
     "vent_ratio": 0.8333,
     "hide_number": 11,
     "mission_number": 0,
-    "player_start": [
+    "human_start": [
       3,
       10
     ],
@@ -720,9 +720,9 @@
       28,
       3
     ],
-    "dist_player_exit": 32,
+    "dist_human_exit": 32,
     "dist_alien_exit": 17,
-    "dist_alien_player": 29,
+    "dist_alien_human": 29,
     "computed_alpha": -0.0016
   }
 }

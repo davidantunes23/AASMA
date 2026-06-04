@@ -30,7 +30,7 @@ KnowledgeMode = Literal["off", "on"]
 AgentRole = Literal["human", "alien", "other"]
 
 UNKNOWN_TILE = -1
-PLAYER_SEEN_TILE = -2
+HUMAN_SEEN_TILE = -2
 RADAR_PING_TILE = -3
 NOISE_RIPPLE_TILE = -4
 
@@ -157,7 +157,7 @@ class GenericMapSimulation:
         "#2e2e4a",  # FLOOR
         "#9b59b6",  # VENT
         "#27ae60",  # HIDE
-        "#2980b9",  # PLAYER_START
+        "#2980b9",  # HUMAN_START
         "#c0392b",  # ALIEN_START
         "#f39c12",  # EXIT
         "#1abc9c",  # MISSION
@@ -167,7 +167,7 @@ class GenericMapSimulation:
         "#2e2e4a",  # FLOOR
         "#9b59b6",  # VENT
         "#27ae60",  # HIDE
-        "#2980b9",  # PLAYER_START
+        "#2980b9",  # HUMAN_START
         "#c0392b",  # ALIEN_START
         "#f39c12",  # EXIT
         "#1abc9c",  # MISSION
@@ -1466,7 +1466,7 @@ class GenericMapSimulation:
                             agent.last_known_pos = None
                             agent.last_heard_pos = None
                             agent.steps_since_heard = 999
-                            agent.player_known_hiding = False
+                            agent.human_known_hiding = False
                             agent.path = []
                             agent.state = AlienState.SEARCH
                         except Exception:

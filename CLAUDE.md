@@ -34,7 +34,7 @@ python run.py --demo random --seed 42 --no-show
 # World-only view (no knowledge panels)
 python run.py --human-class role --style world --no-show --seed 42
 
-# Alien-favoured map (more vents), player-favoured (more hiding spots)
+# Alien-favoured map (more vents), human-favoured (more hiding spots)
 python run.py --alpha 0.8 --seed 42 --no-show
 python run.py --alpha -0.5 --seed 42 --no-show
 
@@ -77,11 +77,11 @@ Key `run.py` flags: `--seed`, `--width`, `--height`, `--alpha`, `--max-steps`, `
 ### Tile IDs
 
 ```plaintext
-0=WALL  1=FLOOR  2=VENT  3=HIDE  4=PLAYER_START  5=ALIEN_START  6=EXIT  7=MISSION
+0=WALL  1=FLOOR  2=VENT  3=HIDE  4=HUMAN_START  5=ALIEN_START  6=EXIT  7=MISSION
 ```
 
 `PASSABLE_ALIEN = {1,2,4,5,6}` — aliens cannot enter HIDE tiles normally.
-`PASSABLE_ALIEN_RUSH = {1,2,3,4,5,6}` — used when alien confirmed the player is hiding there.
+`PASSABLE_ALIEN_RUSH = {1,2,3,4,5,6}` — used when alien confirmed the human is hiding there.
 
 ### Agent hierarchy (`agents/`)
 
@@ -100,7 +100,7 @@ BaseAgent (ABC)                  agents/base.py            pos:(y,x), direction,
 
 `Direction`, `cone_fov()`, `TeamRole`, and `direction_from_delta()` live in `agents/base.py`.
 
-**Interface contract**: every agent exposes `step(player_pos, heard_pos, step_num) → (y,x)`. Human agents additionally have `observe(obs, radar_threat, radar_dist)` called before `step()` each turn.
+**Interface contract**: every agent exposes `step(human_pos, heard_pos, step_num) → (y,x)`. Human agents additionally have `observe(obs, radar_threat, radar_dist)` called before `step()` each turn.
 
 **Adding a new agent**: subclass `BaseAlienAgent` or `BaseHumanAgent`, implement `step()` (and `observe()` for humans), then wrap with `build_agent_spec(label, role, agent)` from `simulation.py`.
 
@@ -108,9 +108,9 @@ BaseAgent (ABC)                  agents/base.py            pos:(y,x), direction,
 
 - **SEARCH**: explores unknown frontiers, falls back to patrol waypoints
 - **INVESTIGATE**: moves to last known / last heard position
-- **HUNT** (speed=2): pursues visible player; `player_known_hiding=True` unlocks `PASSABLE_ALIEN_RUSH`
+- **HUNT** (speed=2): pursues visible human; `human_known_hiding=True` unlocks `PASSABLE_ALIEN_RUSH`
 
-Transition to HUNT-with-hiding only fires if the alien was **already in HUNT** when it sees `player_hiding=True`. A wandering alien cannot detect a player inside a hide spot.
+Transition to HUNT-with-hiding only fires if the alien was **already in HUNT** when it sees `human_hiding=True`. A wandering alien cannot detect a human inside a hide spot.
 
 `_move_one()` always replans in HUNT to prevent the 2-cell overshoot ("tunneling") bug. Vent teleportation triggers only when savings exceed `VENT_ROUTE_MIN_SAVINGS = 4` steps and sound distance exceeds `VENT_ROUTE_MIN_SOUND_DISTANCE = 8`.
 
@@ -147,12 +147,12 @@ Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-
 2. For each agent: build cone observation → call `observe()` (humans) → call `step()`
 3. Relay coord messages between role-aware human agents
 4. Update mission dwell progress; fire `MISSION_DONE` events and trigger role reassignment
-5. Alien `nearest_target` always uses the human's **actual** position — the alien's own `cone_fov` + `player_hiding` flag handles visibility correctly
+5. Alien `nearest_target` always uses the human's **actual** position — the alien's own `cone_fov` + `human_hiding` flag handles visibility correctly
 
 Key mechanics (active when `enable_mechanics=True`; disabled for `--demo random`):
 
 - **Radar**: topology-aware BFS distance → CRITICAL/CLOSE/NEAR/FAR every `radar_interval` steps
-- **Noise**: player emits a jittered sound position each step with `p_noise` probability (default 0.10, configurable via `--noise-prob`); suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
+- **Noise**: human emits a jittered sound position each step with `p_noise` probability (default 0.10, configurable via `--noise-prob`); suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
 - **Cone FOV**: both agent types use `cone_fov()` — directional, wall/hide-blocked LoS via Bresenham
 
 ### Visualization (`simulation.py` render)
@@ -171,7 +171,7 @@ Runs all human/alien pairings (random, rule, omniscient, role, coop humans × ra
 
 ### Training (`training/`)
 
-**Partially broken.** `training/envs.py` (`BaseAETEnv`, `AlienEnv`, `PlayerEnv`) imports `from game import Game` — a module that no longer exists — so the gymnasium environments do not run. The obs/reward logic in `training/obs_rewards.py` is intact and importable.
+**Partially broken.** `training/envs.py` (`BaseAETEnv`, `AlienEnv`, `HumanEnv`) imports `from game import Game` — a module that no longer exists — so the gymnasium environments do not run. The obs/reward logic in `training/obs_rewards.py` is intact and importable.
 
 The staged training design (`train_staged.py`) targets a 4-phase PPO curriculum:
 
