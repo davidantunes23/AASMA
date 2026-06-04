@@ -93,7 +93,10 @@ def astar(grid, start, goal, passable):
             nb = (ny, nx)
             if not (0 <= nx < W and 0 <= ny < H):
                 continue
-            if grid[ny, nx] not in passable:
+            cell = grid[ny, nx]
+            if cell == PLAYER_SEEN:
+                cell = int(Tile.FLOOR)  # PLAYER_SEEN overwrites the tile ID; restore for pathfinding
+            if cell not in passable:
                 continue
             ng = g[cur] + 1
             if ng < g.get(nb, float("inf")):
@@ -134,13 +137,17 @@ class KnowledgeMap:
         candidates = []
         for y in range(H):
             for x in range(W):
-                if self.knowledge[y, x] not in (UNKNOWN, PLAYER_SEEN) and self.knowledge[y, x] in PASSABLE_ALIEN:
-                    for dy, dx in DIRS:
-                        ny, nx = y + dy, x + dx
-                        if 0 <= nx < W and 0 <= ny < H:
-                            if self.knowledge[ny, nx] == UNKNOWN:
-                                candidates.append((y, x))
-                                break
+                cell = self.knowledge[y, x]
+                if cell == PLAYER_SEEN:
+                    cell = int(Tile.FLOOR)
+                if cell == UNKNOWN or cell not in PASSABLE_ALIEN:
+                    continue
+                for dy, dx in DIRS:
+                    ny, nx = y + dy, x + dx
+                    if 0 <= nx < W and 0 <= ny < H:
+                        if self.knowledge[ny, nx] == UNKNOWN:
+                            candidates.append((y, x))
+                            break
         return candidates
 
     def get_seen_vents(self):
