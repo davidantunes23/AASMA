@@ -1319,14 +1319,18 @@ class GenericMapSimulation:
                 nearest_target = self._nearest_target(current_position, opposing_positions) or current_position
                 # humans generally ignore heard_pos; pass None
                 new_pos = spec.agent.step(nearest_target, None, step)
-                self._set_position(spec, (int(new_pos[0]), int(new_pos[1])))
+                ty, tx = int(new_pos[0]), int(new_pos[1])
+                # Guard: reject moves into real walls — the agent's partial map may have
+                # UNKNOWN cells adjacent to hide spots that are actually walls.
+                if int(self.grid[ty, tx]) == int(Tile.WALL):
+                    ty, tx = current_position[0], current_position[1]
+                    # step() set agent.hidden based on the invalid position; restore it.
+                    spec.agent.hidden = bool(self.grid[ty, tx] == int(Tile.HIDE))
+                self._set_position(spec, (ty, tx))
 
                 if exit_open and exit_pos is not None and self._get_position(spec) == exit_pos:
                     escaped_humans.add(spec.label)
-                    try:
-                        setattr(spec.agent, "escaped", True)
-                    except Exception:
-                        pass
+                    spec.agent.escaped = True
 
                 # Mission dwell is counted once per occupied mission tile each step.
                 mission_positions_touched.add(self._get_position(spec))

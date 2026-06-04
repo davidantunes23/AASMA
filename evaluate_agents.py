@@ -251,7 +251,6 @@ def run_episode(
     grid: np.ndarray,
     max_steps: int,
     view_length: int,
-    idle_limit: int,
     seed: int,
     human_spec: HumanSpec,
     alien_spec: AlienSpec,
@@ -262,28 +261,6 @@ def run_episode(
 
     outcome_frame = next((frame for frame in frames if frame.outcome is not None), frames[-1])
     outcome_step = int(outcome_frame.step)
-
-    idle_steps = 0
-    idle_trigger_idx: int | None = None
-    for idx in range(1, len(frames)):
-        prev_positions = [agent.position for agent in frames[idx - 1].agents if agent.role == "human"]
-        curr_positions = [agent.position for agent in frames[idx].agents if agent.role == "human"]
-        if curr_positions == prev_positions:
-            idle_steps += 1
-            if idle_steps >= idle_limit:
-                idle_trigger_idx = idx
-                break
-        else:
-            idle_steps = 0
-
-    if idle_limit > 0 and idle_trigger_idx is not None:
-        frame = frames[idle_trigger_idx]
-        return EpisodeRun(
-            frames=frames[: idle_trigger_idx + 1],
-            outcome="idle_timeout",
-            outcome_step=int(frame.step),
-            timeout=True,
-        )
 
     timeout = outcome == "max_steps_reached"
     return EpisodeRun(
@@ -301,7 +278,7 @@ def classify_outcome_type(
     total_humans: int,
     timeout: bool,
 ) -> str:
-    if timeout or outcome in {"max_steps_reached", "idle_timeout"}:
+    if timeout or outcome == "max_steps_reached":
         return "timeout"
     if escaped_count >= total_humans:
         return "full_escape"
@@ -425,7 +402,6 @@ def evaluate_matchup(
     height: int,
     max_steps: int,
     view_length: int,
-    idle_limit: int,
     human_spec: HumanSpec,
     alien_spec: AlienSpec,
     p_noise: float = 0.10,
@@ -453,7 +429,6 @@ def evaluate_matchup(
             grid=grid,
             max_steps=max_steps,
             view_length=view_length,
-            idle_limit=idle_limit,
             seed=episode_seed,
             human_spec=human_spec,
             alien_spec=alien_spec,
@@ -927,7 +902,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--map-height", type=int, default=40, help="Fallback height if --map-sizes is empty")
     parser.add_argument("--max-steps", type=int, default=2000)
     parser.add_argument("--view-length", type=int, default=6)
-    parser.add_argument("--idle-limit", type=int, default=50)
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -1033,7 +1007,6 @@ def main() -> None:
                         height=height,
                         max_steps=args.max_steps,
                         view_length=args.view_length,
-                        idle_limit=args.idle_limit,
                         human_spec=human_spec,
                         alien_spec=alien_spec,
                         p_noise=args.noise_prob,

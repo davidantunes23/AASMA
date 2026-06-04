@@ -138,8 +138,8 @@ def build_agents(
             from agents.random_human import RandomHumanAgent
             return RandomHumanAgent(pos=pos, rng=random.Random(seed + ix))
         if human_class == "role":
-            from agents.role_human import RoleHumanAgent
             from agents.base import Direction
+            from agents.role_human import RoleHumanAgent
             return RoleHumanAgent(start_pos=pos, start_dir=Direction.NORTH)
         if human_class == "coop":
             from agents.base import Direction
