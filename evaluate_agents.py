@@ -74,6 +74,8 @@ class EpisodeMetrics:
     capture_steps: dict[str, int | None]
     active_counts: list[int]
     mission_counts: list[int]
+    captured_roles: list[str]
+    exit_discovery_step: int | None
 
 
 @dataclass
@@ -315,6 +317,7 @@ def extract_episode_metrics(
     run: EpisodeRun,
     total_humans: int,
     max_steps: int,
+    exit_pos: tuple[int, int],
 ) -> EpisodeMetrics:
     frames = run.frames
     if not frames:
@@ -329,6 +332,8 @@ def extract_episode_metrics(
             capture_steps={},
             active_counts=[0] * (max_steps + 1),
             mission_counts=[0] * (max_steps + 1),
+            captured_roles=[],
+            exit_discovery_step=None,
         )
 
     human_labels = [a.label for a in frames[0].agents if a.role == "human"]
@@ -337,10 +342,35 @@ def extract_episode_metrics(
     active_by_step: dict[int, int] = {}
     mission_by_step: dict[int, int] = {}
 
+    captured_roles: list[str] = []
+    latest_roles = {label: "NONE" for label in human_labels}
+    already_captured = set()
+    exit_discovery_step = None
+
     for frame in frames:
         step = min(int(frame.step), max_steps)
         escaped = set(frame.escaped_humans or [])
         captured = set(frame.captured_humans or [])
+
+        # Check if the exit is discovered by any human agent
+        if exit_discovery_step is None:
+            for agent in frame.agents:
+                if agent.role == "human" and exit_pos in agent.fov:
+                    exit_discovery_step = step
+                    break
+
+        for agent in frame.agents:
+            if agent.role == "human" and agent.label not in already_captured:
+                if agent.team_role is not None:
+                    role_str = getattr(agent.team_role, "name", str(agent.team_role))
+                    latest_roles[agent.label] = role_str.split(".")[-1]
+                else:
+                    latest_roles[agent.label] = "NONE"
+        
+        newly_captured = captured - already_captured
+        for label in newly_captured:
+            captured_roles.append(latest_roles.get(label, "NONE"))
+        already_captured.update(newly_captured)
         for label in escaped:
             if label in escape_steps and escape_steps[label] is None:
                 escape_steps[label] = step
@@ -384,6 +414,8 @@ def extract_episode_metrics(
         capture_steps=capture_steps,
         active_counts=active_counts,
         mission_counts=mission_counts,
+        captured_roles=captured_roles,
+        exit_discovery_step=exit_discovery_step,
     )
 
 
@@ -432,11 +464,13 @@ def evaluate_matchup(
             print(f"python run.py --human-class {human_spec.key} --human-count {human_spec.count} --seed {episode_seed} --width {width} --height {height} --max-steps {max_steps} --no-show")
             sys.exit(0)
 
+        exit_pos = find_tile(grid, Tile.EXIT)
         metrics = extract_episode_metrics(
             seed=episode_seed,
             run=run,
             total_humans=total_humans,
             max_steps=max_steps,
+            exit_pos=exit_pos,
         )
         episodes.append(metrics)
         if not human_labels and run.frames:
@@ -725,6 +759,69 @@ def plot_steps_boxplot(
 
     plt.close(fig)
 
+
+def plot_captured_roles_breakdown(
+    labels: list[str],
+    captured_roles_by_label: dict[str, list[str]],
+    output: str,
+    show_window: bool,
+):
+    filtered_labels = [L for L in labels if len(captured_roles_by_label.get(L, [])) > 0]
+    if not filtered_labels:
+        return
+
+    role_categories = ["WORKER", "DECOY", "EXPLORER", "NONE"]
+    data = {r: [] for r in role_categories}
+
+    for label in filtered_labels:
+        roles = captured_roles_by_label[label]
+        total = len(roles)
+        counts = {r: roles.count(r) for r in role_categories}
+        for r in role_categories:
+            data[r].append(counts[r] / total * 100.0 if total > 0 else 0.0)
+
+    fig, ax = plt.subplots(figsize=(8.8, 4.9))
+    x = np.arange(len(filtered_labels))
+    bottoms = np.zeros(len(filtered_labels))
+    colors = {"WORKER": "#e74c3c", "DECOY": "#f1c40f", "EXPLORER": "#3498db", "NONE": "#95a5a6"}
+
+    for r in role_categories:
+        values = data[r]
+        ax.bar(x, values, bottom=bottoms, color=colors[r], label=r)
+        bottoms += np.array(values)
+
+    ax.set_title("Division of Roles among Captured Agents")
+    ax.set_xlabel("human model")
+    ax.set_ylabel("Percentage (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels(filtered_labels, rotation=20, ha="right")
+    ax.grid(True, axis="y", alpha=0.25)
+    
+    # Place legend outside
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.85, box.height])
+    ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
+
+    if output:
+        import os
+        os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
+        fig.savefig(output, dpi=160, bbox_inches="tight")
+        print(f"Saved plot -> {output}")
+
+    if show_window:
+        has_display = bool(
+            os.environ.get("DISPLAY")
+            or os.environ.get("WAYLAND_DISPLAY")
+        )
+        backend = matplotlib.get_backend().lower()
+        if not has_display or backend == "agg":
+            plt.close(fig)
+            return
+        plt.show()
+        return
+
+    plt.close(fig)
+
 def plot_bar_comparison(
     labels: list[str],
     values: list[float],
@@ -896,6 +993,16 @@ def main() -> None:
         for spec in HUMAN_SPECS
     }
 
+    rule_alien_captured_roles: dict[str, list[str]] = {
+        spec.label: []
+        for spec in HUMAN_SPECS
+    }
+
+    rule_alien_exit_discovery_steps: dict[str, list[int]] = {
+        spec.label: []
+        for spec in HUMAN_SPECS
+    }
+
     print("Evaluating human vs alien pairings")
     for human_spec in selected_humans:
         for alien_spec in selected_aliens:
@@ -990,6 +1097,14 @@ def main() -> None:
                             ep.steps for ep in episodes
                         )
 
+                        for ep in episodes:
+                            rule_alien_captured_roles[human_spec.label].extend(ep.captured_roles)
+                            
+                            # Collect exit discovery steps
+                            if ep.exit_discovery_step is not None:
+                                rule_alien_exit_discovery_steps[human_spec.label].append(ep.exit_discovery_step)
+
+
                         mission_histogram = rule_alien_mission_totals[human_spec.label]
 
                         for ep in episodes:
@@ -1065,40 +1180,18 @@ def main() -> None:
 
         comparison_output = os.path.join(comparison_dir, "mission_completion_counts.png")
 
-        print("\nMission completion statistics:")
-
-        for label in comparison_labels:
-            counts = rule_alien_mission_totals[label]
-
-            total_episodes = sum(counts)
-
-            if total_episodes == 0:
-                continue
-
-            percentages = [
-                100.0 * count / total_episodes
-                for count in counts
-            ]
-
-            values = rule_alien_steps_per_mission.get(label, [])
-
-            avg_steps_per_mission = (
-                np.mean(values)
-                if values
-                else 0.0
-            )
-
-            print(
-                f"{label}: "
-                f"0 missions={percentages[0]:.1f}% "
-                f"1 mission={percentages[1]:.1f}% "
-                f"2 missions={percentages[2]:.1f}% | "
-                f"avg steps/mission={avg_steps_per_mission:.1f}"
-            )
-
         plot_mission_completion_comparison(
             labels=comparison_labels,
             mission_counts_by_label=rule_alien_mission_totals,
+            output=comparison_output,
+            show_window=args.show,
+        )
+
+        comparison_output = os.path.join(comparison_dir, "captured_roles_breakdown.png")
+        target_labels = [spec.label for spec in selected_humans if spec.key in {"role", "coop", "omniscient"}]
+        plot_captured_roles_breakdown(
+            labels=target_labels,
+            captured_roles_by_label=rule_alien_captured_roles,
             output=comparison_output,
             show_window=args.show,
         )
@@ -1118,6 +1211,64 @@ def main() -> None:
             show_window=args.show,
         )
 
+        comparison_output = os.path.join(comparison_dir, "average_exit_discovery_step.png")
+        plot_bar_comparison(
+            labels=comparison_labels,
+            values=[
+                np.mean(rule_alien_exit_discovery_steps[label])
+                if rule_alien_exit_discovery_steps[label]
+                else 0.0
+                for label in comparison_labels
+            ],
+            title="Average Exit Discovery Step vs Rule Alien",
+            ylabel="average step",
+            output=comparison_output,
+            show_window=args.show,
+        )
+
+        print("\nPerformance Statistics:")
+        for label in comparison_labels:
+            # --- Mission Stats ---
+            counts = rule_alien_mission_totals[label]
+            total_episodes = sum(counts)
+            
+            if total_episodes > 0:
+                percentages = [100.0 * count / total_episodes for count in counts]
+                values = rule_alien_steps_per_mission.get(label, [])
+                avg_steps_per_mission = np.mean(values) if values else 0.0
+                
+                print(
+                    f"{label}: "
+                    f"0 missions={percentages[0]:.1f}% "
+                    f"1 mission={percentages[1]:.1f}% "
+                    f"2 missions={percentages[2]:.1f}% | "
+                    f"avg steps/mission={avg_steps_per_mission:.1f}", end=""
+                )
+            
+            # --- Exit Discovery Stats ---
+            discovery_steps = rule_alien_exit_discovery_steps.get(label, [])
+            if discovery_steps:
+                avg_discovery_step = sum(discovery_steps) / len(discovery_steps)
+                print(f" | avg exit discovery step={avg_discovery_step:.1f}")
+            else:
+                print(" | exit never discovered")
+
+            # --- Episode Steps Stats ---
+            steps = rule_alien_episode_steps.get(label, [])
+            if not steps:
+                continue
+            
+            median = np.median(steps)
+            q1 = np.percentile(steps, 25)
+            q3 = np.percentile(steps, 75)
+            avg = np.mean(steps)
+            
+            print(
+                f"{label:<20} | "
+                f"Mean: {avg:>6.1f} | "
+                f"Median: {median:>6.1f} | "
+                f"IQR: {q1:>6.1f}-{q3:>6.1f}"
+            )
 
 if __name__ == "__main__":
     main()
