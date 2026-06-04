@@ -48,7 +48,19 @@ python map_generator.py 42
 python map_generator.py 42 --visualize
 
 # Multi-episode evaluation across all human/alien pairings
-python evaluate_agents.py --episodes 10 --no-show
+python evaluate_agents.py --episodes 10
+
+# Demo — list curated examples
+python demo.py --list
+
+# Demo — run a curated example by name (verified seed, rule alien)
+python demo.py --example role_all_escape
+
+# Demo — run all examples and save GIFs to output/
+python demo.py --run-all --no-show
+
+# Demo — free-form: pick agent type and (optionally) a seed
+python demo.py --agent role --seed 42
 
 # Verification command (use after any change)
 python run.py --human-class human --human-count 1 --mission-count 0 --no-show --output output/verify.gif && echo "OK"
@@ -140,7 +152,7 @@ Missions are tile ID `7` placed on the map at runtime (controlled by `--mission-
 Key mechanics (active when `enable_mechanics=True`; disabled for `--demo random`):
 
 - **Radar**: topology-aware BFS distance → CRITICAL/CLOSE/NEAR/FAR every `radar_interval` steps
-- **Noise**: player emits a jittered sound position each step with `p_noise` probability (default 0.05, configurable via `--noise-prob`); suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
+- **Noise**: player emits a jittered sound position each step with `p_noise` probability (default 0.10, configurable via `--noise-prob`); suppressed when hiding; DECOY agents can also set `made_loud_noise=True` for deliberate signals forwarded to the alien as an exact position
 - **Cone FOV**: both agent types use `cone_fov()` — directional, wall/hide-blocked LoS via Bresenham
 
 ### Visualization (`simulation.py` render)
@@ -155,7 +167,7 @@ Render produces a multi-panel GIF: **World** panel + per-agent knowledge panels.
 
 ### Evaluation (`evaluate_agents.py`)
 
-Runs all human/alien pairings (random, rule, omniscient, role, coop humans × random and rule aliens) across multiple episodes with a fixed map alpha. Produces per-pairing bar charts, CSV summaries, and a stacked comparison chart for all human models vs the rule alien. Output goes to `output/eval_pairs/` by default.
+Runs all human/alien pairings (random, rule, omniscient, role, coop humans × random and rule aliens) across multiple episodes with a fixed map alpha. Produces survival curves, capture/escape timelines, CSV summaries, and cross-model comparison charts. Output goes to `output/eval/` by default.
 
 ### Training (`training/`)
 
