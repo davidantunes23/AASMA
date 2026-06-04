@@ -374,11 +374,9 @@ class AlienAgent(BaseAlienAgent):
             # Only rush in if the alien was already in HUNT — a wandering alien that
             # merely sees a HIDE tile has no reason to know anyone is inside.
             self.last_known_pos      = player_pos
-            if not self.player_known_hiding:
-                # First time we learn the player is hiding — force a replan toward the hide tile.
-                self.path            = []
-                self.steps_no_replan = self.replan_every
             self.player_known_hiding = True
+            self.path                = []
+            self.steps_no_replan     = self.replan_every
             # state stays HUNT
         elif self.state == AlienState.HUNT:
             self.player_known_hiding = False
@@ -480,12 +478,29 @@ class AlienAgent(BaseAlienAgent):
         if new_pos == self.pos:
             # Path exhausted or blocked — take a greedy step toward the current goal.
             if self.state in (AlienState.HUNT, AlienState.INVESTIGATE):
-                fallback_goal = self.last_known_pos
-            else:
-                fallback_goal = self.last_heard_pos
-            greedy = self._greedy_step_toward(fallback_goal, self._chase_passable())
-            if greedy is not None:
-                new_pos = greedy
+                greedy = self._greedy_step_toward(self.last_known_pos, self._chase_passable())
+                if greedy is not None:
+                    new_pos = greedy
+            elif self.state == AlienState.SEARCH:
+                # Check whether the current cell is a frontier (has an unknown neighbour).
+                km = self.knowledge.knowledge
+                H, W = km.shape
+                ky, kx = self.pos
+                unknown_dir = None
+                for dy, dx in DIRS:
+                    ny, nx = ky + dy, kx + dx
+                    if 0 <= ny < H and 0 <= nx < W and km[ny, nx] == UNKNOWN:
+                        unknown_dir = direction_from_delta(dy, dx)
+                        break
+                if unknown_dir is not None:
+                    # At a frontier: rotate toward the unknown neighbour so the cone
+                    # observation on the next tick can resolve it.  Don't greedy-step
+                    # backward — that causes the 2-cell oscillation near HIDE tiles.
+                    self.direction = unknown_dir
+                elif self.last_heard_pos is not None:
+                    greedy = self._greedy_step_toward(self.last_heard_pos, PASSABLE_ALIEN)
+                    if greedy is not None:
+                        new_pos = greedy
 
         if new_pos != self.pos:
             self.direction = direction_from_delta(new_pos[0] - self.pos[0], new_pos[1] - self.pos[1])
@@ -527,15 +542,6 @@ class AlienAgent(BaseAlienAgent):
                 frontiers = [f for f in self.knowledge.get_unknown_frontier() if f != self.pos]
                 if frontiers:
                     goal = min(frontiers, key=lambda f: heuristic(f, self.last_known_pos))
-                    path = astar(km, self.pos, goal, PASSABLE_ALIEN)
-            elif len(path) <= 1 and self.player_known_hiding:
-                # Alien has arrived at the hide tile but can't advance further (already there
-                # or path exhausted). Give up the rush and resume SEARCH to avoid freezing.
-                self.player_known_hiding = False
-                self.state = AlienState.SEARCH
-                frontiers = [f for f in self.knowledge.get_unknown_frontier() if f != self.pos]
-                if frontiers:
-                    goal = min(frontiers, key=lambda f: heuristic(self.pos, f))
                     path = astar(km, self.pos, goal, PASSABLE_ALIEN)
             return path
 
