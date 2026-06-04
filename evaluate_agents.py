@@ -263,6 +263,8 @@ def run_episode(
     outcome_step = int(outcome_frame.step)
 
     timeout = outcome == "max_steps_reached"
+    if outcome == "max_steps_reached":
+        print(f"\n[TIMEOUT] seed={seed}, map={grid.shape[1]}x{grid.shape[0]}, human={human_spec.key}, alien={alien_spec.key}")
     return EpisodeRun(
         frames=frames,
         outcome=outcome,
@@ -397,64 +399,23 @@ def extract_episode_metrics(
 
 
 def evaluate_matchup(
-    episode_seeds: list[int],
-    width: int,
-    height: int,
-    max_steps: int,
-    view_length: int,
-    human_spec: HumanSpec,
-    alien_spec: AlienSpec,
-    p_noise: float = 0.10,
-    stop_on_timeout: bool = False,
+    validated_episodes: list[tuple[EpisodeMetrics, list[str]]],
 ) -> MatchupMetrics:
+    """Build a MatchupMetrics from a list of already-validated (metrics, human_labels) pairs."""
     escaped_counts = [0, 0, 0, 0]
     total_steps = 0
     episodes: list[EpisodeMetrics] = []
     human_labels: list[str] = []
-    total_humans = human_spec.count
 
-    for episode_seed in episode_seeds:
-        random.seed(episode_seed)
-        np.random.seed(episode_seed)
-
-        generator = MapGenerator(
-            width=width,
-            height=height,
-            alpha=ALPHA,
-            seed=episode_seed,
-            mission_count=MISSION_COUNT,
-        )
-        grid = generator.generate()
-        run = run_episode(
-            grid=grid,
-            max_steps=max_steps,
-            view_length=view_length,
-            seed=episode_seed,
-            human_spec=human_spec,
-            alien_spec=alien_spec,
-            p_noise=p_noise,
-        )
-        if stop_on_timeout and run.outcome == "max_steps_reached":
-            print(f"\n[STOP] max_steps reached: seed={episode_seed}, map={width}x{height}, human={human_spec.key}")
-            print(f"python run.py --human-class {human_spec.key} --human-count {human_spec.count} --seed {episode_seed} --width {width} --height {height} --max-steps {max_steps} --no-show")
-            sys.exit(0)
-
-        exit_pos = find_tile(grid, Tile.EXIT)
-        metrics = extract_episode_metrics(
-            seed=episode_seed,
-            run=run,
-            total_humans=total_humans,
-            max_steps=max_steps,
-            exit_pos=exit_pos,
-        )
+    for metrics, labels in validated_episodes:
         episodes.append(metrics)
-        if not human_labels and run.frames:
-            human_labels = [a.label for a in run.frames[0].agents if a.role == "human"]
+        if not human_labels and labels:
+            human_labels = labels
         total_steps += metrics.steps
         escaped_idx = max(0, min(metrics.escaped_count, HUMAN_COUNT))
         escaped_counts[escaped_idx] += 1
 
-    total = max(len(episode_seeds), 1)
+    total = max(len(episodes), 1)
     escaped_percentages = [count / total * 100.0 for count in escaped_counts]
     return MatchupMetrics(
         escape_stats=EscapeStats(
@@ -467,10 +428,114 @@ def evaluate_matchup(
     )
 
 
-def build_episode_seeds(base_seed: int, width: int, height: int, episodes: int) -> list[int]:
+def build_seed_generator(base_seed: int, width: int, height: int):
+    """Return an infinite generator of unique episode seeds for a given map size."""
     mix_seed = base_seed ^ (width << 16) ^ height
     rng = np.random.default_rng(mix_seed)
-    return [int(rng.integers(0, 2**31 - 1)) for _ in range(episodes)]
+    while True:
+        yield int(rng.integers(0, 2**31 - 1))
+
+
+def collect_episodes(
+    seed_gen,
+    target_episodes: int,
+    width: int,
+    height: int,
+    max_steps: int,
+    view_length: int,
+    human_alien_pairs: list[tuple[HumanSpec, AlienSpec]],
+    p_noise: float = 0.10,
+    stop_on_timeout: bool = False,
+) -> dict[tuple[str, str], list[tuple[EpisodeMetrics, list[str]]]]:
+    """
+    Draw seeds one at a time and run every (human_spec, alien_spec) pair against each seed.
+    A seed is only accepted when *none* of the pairs time out on it.
+    Repeats until every pair has collected `target_episodes` valid episodes.
+
+    Returns a dict keyed by (human_spec.key, alien_spec.key) -> list of (metrics, human_labels).
+    """
+    results: dict[tuple[str, str], list[tuple[EpisodeMetrics, list[str]]]] = {
+        (h.key, a.key): [] for h, a in human_alien_pairs
+    }
+    accepted = 0
+    skipped = 0
+
+    while accepted < target_episodes:
+        seed = next(seed_gen)
+
+        random.seed(seed)
+        np.random.seed(seed)
+
+        generator = MapGenerator(
+            width=width,
+            height=height,
+            alpha=ALPHA,
+            seed=seed,
+            mission_count=MISSION_COUNT,
+        )
+        grid = generator.generate()
+        exit_pos = find_tile(grid, Tile.EXIT)
+
+        # Run all pairs for this seed; bail out early on any timeout.
+        pair_results: dict[tuple[str, str], tuple[EpisodeMetrics, list[str]]] = {}
+        seed_valid = True
+
+        for human_spec, alien_spec in human_alien_pairs:
+            run = run_episode(
+                grid=grid,
+                max_steps=max_steps,
+                view_length=view_length,
+                seed=seed,
+                human_spec=human_spec,
+                alien_spec=alien_spec,
+                p_noise=p_noise,
+            )
+
+            if stop_on_timeout and run.timeout:
+                print(
+                    f"\n[STOP] max_steps reached: seed={seed}, map={width}x{height}, "
+                    f"human={human_spec.key}"
+                )
+                print(
+                    f"python run.py --human-class {human_spec.key} --human-count "
+                    f"{human_spec.count} --seed {seed} --width {width} --height {height} "
+                    f"--max-steps {max_steps} --no-show"
+                )
+                sys.exit(0)
+
+            if run.timeout:
+                seed_valid = False
+                skipped += 1
+                print(
+                    f"[SKIP] seed={seed}, map={width}x{height}, "
+                    f"human={human_spec.key}, alien={alien_spec.key} — timeout"
+                )
+                break
+
+            metrics = extract_episode_metrics(
+                seed=seed,
+                run=run,
+                total_humans=human_spec.count,
+                max_steps=max_steps,
+                exit_pos=exit_pos,
+            )
+            labels: list[str] = []
+            if run.frames:
+                labels = [a.label for a in run.frames[0].agents if a.role == "human"]
+            pair_results[(human_spec.key, alien_spec.key)] = (metrics, labels)
+
+        if seed_valid:
+            for key, data in pair_results.items():
+                results[key].append(data)
+            accepted += 1
+
+    if skipped:
+        print(
+            f"\n[INFO] map={width}x{height}: accepted {accepted} seeds, "
+            f"skipped {skipped} seeds due to timeouts."
+        )
+
+    return results
 
 
 def plot_survivor_count_comparison(
@@ -977,7 +1042,29 @@ def main() -> None:
         for spec in HUMAN_SPECS
     }
 
+    all_pairs = [(h, a) for h in selected_humans for a in selected_aliens]
+
+    # Collect all episodes per map size in one pass so every pair shares the same seeds.
+    # results[width, height] -> dict keyed by (human_spec.key, alien_spec.key)
+    results_by_map: dict[tuple[int, int], dict[tuple[str, str], list[tuple[EpisodeMetrics, list[str]]]]] = {}
+
     print("Evaluating human vs alien pairings")
+    for width, height in map_sizes:
+        seed_gen = build_seed_generator(args.seed, width, height)
+        print(f"\n=== Map size: {width}x{height} ===")
+        results_by_map[(width, height)] = collect_episodes(
+            seed_gen=seed_gen,
+            target_episodes=args.episodes,
+            width=width,
+            height=height,
+            max_steps=args.max_steps,
+            view_length=args.view_length,
+            human_alien_pairs=all_pairs,
+            p_noise=args.noise_prob,
+            stop_on_timeout=args.stop_on_timeout,
+        )
+
+    # Post-processing: write CSVs and plots per pair, drawing from already-collected results.
     for human_spec in selected_humans:
         for alien_spec in selected_aliens:
             pair_name = f"{human_spec.label} vs {alien_spec.label}"
@@ -998,19 +1085,9 @@ def main() -> None:
                 write_summary_table_header(table_writer)
 
                 for width, height in map_sizes:
-                    episode_seeds = build_episode_seeds(args.seed, width, height, args.episodes)
-
-                    print(f"\nMap size: {width}x{height}")
+                    pair_key = (human_spec.key, alien_spec.key)
                     matchup = evaluate_matchup(
-                        episode_seeds=episode_seeds,
-                        width=width,
-                        height=height,
-                        max_steps=args.max_steps,
-                        view_length=args.view_length,
-                        human_spec=human_spec,
-                        alien_spec=alien_spec,
-                        p_noise=args.noise_prob,
-                        stop_on_timeout=args.stop_on_timeout,
+                        validated_episodes=results_by_map[(width, height)][pair_key],
                     )
                     stats = matchup.escape_stats
                     episodes = matchup.episodes
@@ -1046,7 +1123,7 @@ def main() -> None:
                     else:
                         mission_completion_rate = 0.0
                     alien_captures = sum(ep.captured_count for ep in episodes)
-                    
+
                     table_writer.writerow([
                         width,
                         height,
@@ -1072,11 +1149,10 @@ def main() -> None:
 
                         for ep in episodes:
                             rule_alien_captured_roles[human_spec.label].extend(ep.captured_roles)
-                            
+
                             # Collect exit discovery steps
                             if ep.exit_discovery_step is not None:
                                 rule_alien_exit_discovery_steps[human_spec.label].append(ep.exit_discovery_step)
-
 
                         mission_histogram = rule_alien_mission_totals[human_spec.label]
 
