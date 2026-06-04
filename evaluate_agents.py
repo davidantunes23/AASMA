@@ -103,8 +103,8 @@ class AlienSpec:
 HUMAN_SPECS = [
     HumanSpec("random", "random_human", HUMAN_COUNT, role_based=False, omniscient=False),
     HumanSpec("rule", "rule_human", HUMAN_COUNT, role_based=False, omniscient=False),
-    HumanSpec("role", "role_human_3", HUMAN_COUNT, role_based=True, omniscient=False),
-    HumanSpec("coop", "coop_role_human_3", HUMAN_COUNT, role_based=True, omniscient=False),
+    HumanSpec("role", "role_human", HUMAN_COUNT, role_based=True, omniscient=False),
+    HumanSpec("coop", "coop_role_human", HUMAN_COUNT, role_based=True, omniscient=False),
     HumanSpec("omniscient", "omniscient_human", HUMAN_COUNT, role_based=True, omniscient=True),
 ]
 
@@ -1197,13 +1197,14 @@ def main() -> None:
         )
 
         comparison_output = os.path.join(comparison_dir, "average_steps_per_mission.png")
+        target_labels = [spec.label for spec in selected_humans if spec.key != "random"]
         plot_bar_comparison(
-            labels=comparison_labels,
+            labels=target_labels,
             values=[
                 np.mean(rule_alien_steps_per_mission[label])
                 if rule_alien_steps_per_mission[label]
                 else 0.0
-                for label in comparison_labels
+                for label in target_labels
             ],
             title="Average steps per completed mission",
             ylabel="steps / mission",

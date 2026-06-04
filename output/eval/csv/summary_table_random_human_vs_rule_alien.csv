@@ -1,0 +1,2 @@
+map_width,map_height,episodes,avg_steps,escaped_0_count,escaped_1_count,escaped_2_count,escaped_3_count,alien_captures,timeout_rate_pct,mission_completion_rate_pct
+60,40,1000,155.98,1000,0,0,0,2977,1.00,2.80
