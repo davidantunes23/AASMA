@@ -23,15 +23,12 @@ import sys
 # ---------------------------------------------------------------------------
 EXAMPLES: dict[str, tuple] = {
     # ── Random agents (baseline — mechanics disabled) ─────────────────────
-    "random_timeout":     ("random", 3, 2, 0,   "random agents wander aimlessly — nobody escapes"),
     "random_all_caught":  ("random", 3, 2, 1,   "alien catches all 3 random agents"),
-    "random_some_escape": ("random", 3, 2, 734, "1 random agent stumbles to the exit by chance"),
 
     # ── Rule-based humans, no coordination (3 agents, 2 missions) ────────
     # Note: rule agents either all escape or all get caught — partial escape is rare
     "rule_all_escape":    ("human",  3, 2, 32,  "3/3 uncoordinated humans escape after completing missions"),
     "rule_all_caught":    ("human",  3, 2, 0,   "alien catches all 3 uncoordinated humans"),
-    "rule_timeout":       ("human",  3, 2, 7,   "episode times out — agents loop without completing missions"),
 
     # ── Role-based agents (WORKER / DECOY / EXPLORER) ────────────────────
     "role_all_escape":    ("role",   3, 2, 5,   "3/3 humans escape — Worker/Decoy/Explorer roles succeed"),
@@ -39,10 +36,9 @@ EXAMPLES: dict[str, tuple] = {
     "role_all_caught":    ("role",   3, 2, 0,   "alien catches all 3 before missions complete"),
 
     # ── Cooperative agents (shared belief map) ────────────────────────────
-    # Note: coop all_escape is rare with this spawn — coop some_escape and timeout shown instead
+    "coop_all_escape":    ("coop",   3, 2, 13,  "3/3 escape — shared belief map enables full coordination"),
     "coop_some_escape":   ("coop",   3, 2, 0,   "partial escape — shared map helps but alien intercepts one"),
-    "coop_all_caught":    ("coop",   3, 2, 1,   "alien corners all 3 before exit opens"),
-    "coop_timeout":       ("coop",   3, 2, 5,   "episode times out — team stalled by alien pressure"),
+    "coop_all_caught":    ("coop",   3, 2, 3,   "alien corners all 3 before exit opens"),
 
     # ── Omniscient agents (full map known from start, upper-bound) ────────
     "omni_all_escape":    ("omniscient", 3, 2, 0,  "3/3 escape — full map knowledge, optimal routing"),
