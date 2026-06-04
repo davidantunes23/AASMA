@@ -84,6 +84,25 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def choose_human_positions(
+    grid: np.ndarray,
+    anchor: tuple[int, int],
+    count: int,
+    avoid: set[tuple[int, int]] | None = None,
+) -> list[tuple[int, int]]:
+    avoid_set = set(avoid or set())
+    candidates: list[tuple[int, int]] = []
+    if anchor not in avoid_set:
+        candidates.append(anchor)
+    floors = [(int(y), int(x)) for y, x in np.argwhere(grid == int(Tile.FLOOR))]
+    floors = [pos for pos in floors if pos not in avoid_set and pos != anchor]
+    floors.sort(key=lambda pos: abs(pos[0] - anchor[0]) + abs(pos[1] - anchor[1]))
+    candidates.extend(floors)
+    if len(candidates) < count:
+        candidates.extend([anchor] * (count - len(candidates)))
+    return candidates[:count]
+
+
 def build_agents(
     grid: np.ndarray,
     demo: str,
@@ -108,29 +127,32 @@ def build_agents(
             if floor_candidates:
                 alien_start = floor_candidates[0]
 
+    human_positions = choose_human_positions(grid, human_start, human_count, avoid={alien_start})
+
     specs: list = []
 
     # Helper to create human instances depending on chosen class
     def make_human_instance(ix: int):
+        pos = human_positions[ix]
         if human_class == "random" or demo == "random":
             from agents.random_human import RandomHumanAgent
-            return RandomHumanAgent(pos=human_start, rng=random.Random(seed + ix))
+            return RandomHumanAgent(pos=pos, rng=random.Random(seed + ix))
         if human_class == "role":
             from agents.role_human import RoleHumanAgent
             from agents.base import Direction
-            return RoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
+            return RoleHumanAgent(start_pos=pos, start_dir=Direction.NORTH)
         if human_class == "coop":
             from agents.base import Direction
             from agents.coop_role_human import CoopRoleHumanAgent
-            return CoopRoleHumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
+            return CoopRoleHumanAgent(start_pos=pos, start_dir=Direction.NORTH)
         if human_class == "omniscient":
             from agents.base import Direction
             from agents.omniscient_human import OmniscientHumanAgent
-            return OmniscientHumanAgent(grid=grid.copy(), start_pos=human_start, start_dir=Direction.NORTH)
+            return OmniscientHumanAgent(grid=grid.copy(), start_pos=pos, start_dir=Direction.NORTH)
         # default: rule-based HumanAgent
         from agents.base import Direction
         from agents.rule_human import HumanAgent
-        return HumanAgent(start_pos=human_start, start_dir=Direction.NORTH)
+        return HumanAgent(start_pos=pos, start_dir=Direction.NORTH)
 
     # Helper to create alien instances depending on chosen class
     def make_alien_instance(ix: int):
