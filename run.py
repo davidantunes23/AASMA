@@ -62,7 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=60, help="Map width (default: 50)")
     parser.add_argument("--height", type=int, default=40, help="Map height (default: 35)")
     parser.add_argument("--alpha", type=float, default=0.0, help="Map alpha in [-1, 1] (default: 0.0)")
-    parser.add_argument("--max-steps", type=int, default=300, help="Maximum simulation steps (default: 300)")
+    parser.add_argument("--max-steps", type=int, default=2000, help="Maximum simulation steps (default: 2000)")
     parser.add_argument("--fps", type=int, default=12, help="Animation FPS (default: 12)")
     parser.add_argument("--output", type=str, default="output/simulation.gif", help="Output GIF path")
     parser.add_argument("--no-show", action="store_true", help="Do not open a preview window")
