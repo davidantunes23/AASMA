@@ -23,27 +23,31 @@ import sys
 # ---------------------------------------------------------------------------
 EXAMPLES: dict[str, tuple] = {
     # ── Random agents (baseline — mechanics disabled) ─────────────────────
-    "random_demo":       ("random", 3, 2, 0,  "random agents wander aimlessly — nobody escapes"),
+    "random_timeout":     ("random", 3, 2, 0,   "random agents wander aimlessly — nobody escapes"),
+    "random_all_caught":  ("random", 3, 2, 1,   "alien catches all 3 random agents"),
+    "random_some_escape": ("random", 3, 2, 734, "1 random agent stumbles to the exit by chance"),
 
     # ── Rule-based humans, no coordination (3 agents, 2 missions) ────────
-    "rule_all_escape":   ("human", 3, 2, 42, "3/3 uncoordinated humans escape after completing missions"),
-    "rule_some_escape":  ("human", 3, 2, 2,  "2/3 escape, 1 caught — no coordination to cover each other"),
-    "rule_all_caught":   ("human", 3, 2, 12, "alien catches all 3 uncoordinated humans"),
+    # Note: rule agents either all escape or all get caught — partial escape is rare
+    "rule_all_escape":    ("human",  3, 2, 32,  "3/3 uncoordinated humans escape after completing missions"),
+    "rule_all_caught":    ("human",  3, 2, 0,   "alien catches all 3 uncoordinated humans"),
+    "rule_timeout":       ("human",  3, 2, 7,   "episode times out — agents loop without completing missions"),
 
     # ── Role-based agents (WORKER / DECOY / EXPLORER) ────────────────────
-    "role_all_escape":   ("role", 3, 2, 0,  "3/3 humans escape after completing both missions"),
-    "role_some_escape":  ("role", 3, 2, 12, "2/3 escape, 1 caught mid-mission"),
-    "role_all_caught":   ("role", 3, 2, 46, "alien catches all 3 before missions complete"),
+    "role_all_escape":    ("role",   3, 2, 5,   "3/3 humans escape — Worker/Decoy/Explorer roles succeed"),
+    "role_some_escape":   ("role",   3, 2, 9,   "partial escape — Decoy sacrificed to protect Workers"),
+    "role_all_caught":    ("role",   3, 2, 0,   "alien catches all 3 before missions complete"),
 
     # ── Cooperative agents (shared belief map) ────────────────────────────
-    "coop_all_escape":   ("coop", 3, 2, 1,  "3/3 escape — team shares map, missions done fast"),
-    "coop_some_escape":  ("coop", 3, 2, 0,  "2/3 escape, 1 caught while working mission"),
-    "coop_all_caught":   ("coop", 3, 2, 2,  "alien corners all 3 before exit opens"),
+    # Note: coop all_escape is rare with this spawn — coop some_escape and timeout shown instead
+    "coop_some_escape":   ("coop",   3, 2, 0,   "partial escape — shared map helps but alien intercepts one"),
+    "coop_all_caught":    ("coop",   3, 2, 1,   "alien corners all 3 before exit opens"),
+    "coop_timeout":       ("coop",   3, 2, 5,   "episode times out — team stalled by alien pressure"),
 
     # ── Omniscient agents (full map known from start, upper-bound) ────────
-    "omni_all_escape":   ("omniscient", 3, 2, 0,  "3/3 escape — fastest path, full knowledge"),
-    "omni_some_escape":  ("omniscient", 3, 2, 2,  "2/3 escape, 1 caught despite full knowledge"),
-    "omni_all_caught":   ("omniscient", 3, 2, 26, "alien wins even against omniscient team"),
+    "omni_all_escape":    ("omniscient", 3, 2, 0,  "3/3 escape — full map knowledge, optimal routing"),
+    "omni_some_escape":   ("omniscient", 3, 2, 1,  "partial escape despite full knowledge"),
+    "omni_all_caught":    ("omniscient", 3, 2, 2,  "alien wins even against omniscient team"),
 }
 # All examples: 3 humans, 2 missions, mission_steps=10 — matches evaluate_agents.py constants.
 
@@ -52,7 +56,7 @@ def list_examples() -> None:
     col_w = max(len(k) for k in EXAMPLES) + 2
     print("\nCurated examples  (run with --example <name>)\n")
     current_prefix = None
-    for name, (agent, hc, mc, seed, desc) in EXAMPLES.items():
+    for name, (_, _, _, seed, desc) in EXAMPLES.items():
         prefix = name.split("_")[0]
         if prefix != current_prefix:
             print(f"  {'─' * 60}")

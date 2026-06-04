@@ -207,12 +207,7 @@ def build_simulation(
 ) -> GenericMapSimulation:
     human_start = find_tile(grid, Tile.PLAYER_START)
     alien_start = find_tile(grid, Tile.ALIEN_START)
-    human_positions = choose_human_positions(
-        grid,
-        human_start,
-        human_spec.count,
-        avoid={alien_start},
-    )
+    human_positions = [human_start] * human_spec.count
 
     human_agents = build_humans(human_spec, grid, human_positions, seed, view_length)
     alien_agent = build_alien(alien_spec, alien_start, seed, view_length)
